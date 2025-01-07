@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -252,7 +252,7 @@ public abstract class Mappings {
 
 
     public static List<Integer> apply2( final Mapping mapping, final List<Integer> list ) {
-        return new AbstractList<Integer>() {
+        return new AbstractList<>() {
             @Override
             public Integer get( int index ) {
                 final int source = list.get( index );
@@ -277,7 +277,7 @@ public abstract class Mappings {
      * @return Permuted view of list
      */
     public static <T> List<T> apply3( final Mapping mapping, final List<T> list ) {
-        return new AbstractList<T>() {
+        return new AbstractList<>() {
             @Override
             public T get( int index ) {
                 return list.get( mapping.getSource( index ) );
@@ -301,7 +301,7 @@ public abstract class Mappings {
      * @return Permuted view of list
      */
     public static <T> List<T> permute( final List<T> list, final TargetMapping mapping ) {
-        return new AbstractList<T>() {
+        return new AbstractList<>() {
             @Override
             public T get( int index ) {
                 return list.get( mapping.getTarget( index ) );
@@ -322,7 +322,7 @@ public abstract class Mappings {
      * Converse of {@link #target(List, int)}
      */
     public static List<Integer> asList( final TargetMapping mapping ) {
-        return new AbstractList<Integer>() {
+        return new AbstractList<>() {
             @Override
             public Integer get( int source ) {
                 int target = mapping.getTargetOpt( source );
@@ -757,6 +757,7 @@ public abstract class Mappings {
          * Returns the number of elements in the mapping.
          */
         int size();
+
     }
 
 
@@ -788,6 +789,7 @@ public abstract class Mappings {
         MappingType getMappingType();
 
         int getSourceCount();
+
     }
 
 
@@ -822,6 +824,7 @@ public abstract class Mappings {
         boolean isIdentity();
 
         Mapping inverse();
+
     }
 
 
@@ -856,6 +859,7 @@ public abstract class Mappings {
         void set( int source, int target );
 
         Mapping inverse();
+
     }
 
 
@@ -989,6 +993,7 @@ public abstract class Mappings {
             buf.append( "]]" );
             return buf.toString();
         }
+
     }
 
 
@@ -1013,6 +1018,7 @@ public abstract class Mappings {
             // not very efficient
             return (obj instanceof Mapping) && toString().equals( obj.toString() );
         }
+
     }
 
 
@@ -1047,13 +1053,6 @@ public abstract class Mappings {
         public void remove() {
             throw new UnsupportedOperationException();
         }
-    }
-
-
-    /**
-     * Thrown when a mapping is expected to return one element but returns several.
-     */
-    public static class TooManyElementsException extends RuntimeException {
 
     }
 
@@ -1071,6 +1070,7 @@ public abstract class Mappings {
         public NoElementException( String message ) {
             super( message );
         }
+
     }
 
 
@@ -1343,7 +1343,9 @@ public abstract class Mappings {
             public void remove() {
                 throw new UnsupportedOperationException();
             }
+
         }
+
     }
 
 
@@ -1387,6 +1389,7 @@ public abstract class Mappings {
         public int getSource( int target ) {
             return sources[target];
         }
+
     }
 
 
@@ -1505,6 +1508,7 @@ public abstract class Mappings {
                 }
             };
         }
+
     }
 
 
@@ -1573,6 +1577,7 @@ public abstract class Mappings {
         public Iterator<IntPair> iterator() {
             throw Util.needToImplement( this );
         }
+
     }
 
 
@@ -1650,6 +1655,7 @@ public abstract class Mappings {
         public Iterator<IntPair> iterator() {
             throw Util.needToImplement( this );
         }
+
     }
 
 
@@ -1793,6 +1799,7 @@ public abstract class Mappings {
         public int getTargetOpt( int source ) {
             return targets[source];
         }
+
     }
 
 
@@ -1906,6 +1913,7 @@ public abstract class Mappings {
         public void set( int source, int target ) {
             parent.set( target, source );
         }
-    }
-}
 
+    }
+
+}

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,456 +16,351 @@
 
 package org.polypheny.db.docker;
 
-import com.github.dockerjava.api.DockerClient;
-import com.github.dockerjava.api.async.ResultCallback;
-import com.github.dockerjava.api.async.ResultCallbackTemplate;
-import com.github.dockerjava.api.command.CreateContainerCmd;
-import com.github.dockerjava.api.command.CreateContainerResponse;
-import com.github.dockerjava.api.command.ExecCreateCmdResponse;
-import com.github.dockerjava.api.command.InspectContainerResponse;
-import com.github.dockerjava.api.command.InspectContainerResponse.ContainerState;
-import com.github.dockerjava.api.command.PullImageResultCallback;
-import com.github.dockerjava.api.model.ExposedPort;
-import com.github.dockerjava.api.model.Frame;
-import com.github.dockerjava.api.model.Ports;
-import com.github.dockerjava.core.DefaultDockerClientConfig;
-import com.github.dockerjava.core.DefaultDockerClientConfig.Builder;
-import com.github.dockerjava.core.DockerClientConfig;
-import com.github.dockerjava.core.DockerClientImpl;
-import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
-import com.google.common.collect.ImmutableList;
+import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
+import java.util.Optional;
+import java.util.Set;
 import lombok.Getter;
-import lombok.Setter;
-import org.apache.commons.lang.time.StopWatch;
+import lombok.extern.slf4j.Slf4j;
 import org.polypheny.db.catalog.Catalog;
-import org.polypheny.db.config.ConfigDocker;
-import org.polypheny.db.config.RuntimeConfig;
-import org.polypheny.db.docker.exceptions.NameExistsRuntimeException;
-import org.polypheny.db.docker.exceptions.PortInUseRuntimeException;
-import org.polypheny.db.util.FileSystemManager;
+import org.polypheny.db.docker.exceptions.DockerUserException;
+import org.polypheny.db.docker.models.DockerHost;
+import org.polypheny.db.docker.models.DockerInstanceInfo;
+import org.polypheny.db.docker.models.HandshakeInfo;
 
 
 /**
- * This class servers as a organization unit which controls all Docker containers in Polypheny,
+ * This class servers as an organization unit which controls all Docker containers in Polypheny,
  * which are placed on a specific Docker instance.
  * While the callers can and should mostly interact with the underlying containers directly,
  * this instance is used to have a control layer, which allows to restore, start or shutdown multiple of
  * these instances at the same time.
- *
- * For now, we have no way to determent if a previously created/running container with the same name
- * was created by Polypheny, so we try to reuse it.
  */
-public class DockerInstance extends DockerManager {
+@Slf4j
+public final class DockerInstance {
 
-    @Getter
-    private ConfigDocker currentConfig;
+    /**
+     * This set is needed for resetDocker and resetCatalog.  The first time we see a new UUID, we save it in the set
+     * and remove all the containers belonging to us.
+     */
+    private static final Set<String> seenInstanceUuids = new HashSet<>();
 
-    private DockerClient client;
-    private final Map<String, Container> availableContainers = new HashMap<>();
-    private final List<Image> availableImages = new ArrayList<>();
-    private final HashMap<Integer, ImmutableList<String>> containersOnAdapter = new HashMap<>();
-
-    // as Docker does not allow two containers with the same name or which expose the same port ( ports only for running containers )
-    // we have to track them, so we can return correct messages to the user
-    @Getter
-    private final List<Integer> usedPorts = new ArrayList<>();
-    @Getter
-    private final List<String> usedNames = new ArrayList<>();
     private final int instanceId;
 
     @Getter
-    @Setter
-    private boolean dockerRunning;
+    private DockerHost host;
+    private Set<String> containerUuids = new HashSet<>();
+
+    /**
+     * The UUID of the Docker daemon we are talking to.  null if we are currently not connected.
+     */
+    private String dockerInstanceUuid;
+
+    /**
+     * The client object used to communicate with this Docker instance.  null if not connected.
+     */
+    private PolyphenyDockerClient client;
+
+    private Status status = Status.NEW;
 
 
-    DockerInstance( Integer instanceId ) {
-        this.currentConfig = RuntimeConfig.DOCKER_INSTANCES.getWithId( ConfigDocker.class, instanceId );
+    private enum Status {
+        NEW,
+        CONNECTED,
+        DISCONNECTED,
+    }
+
+
+    DockerInstance( int instanceId, DockerHost host ) {
         this.instanceId = instanceId;
-        this.client = generateClient( this.instanceId );
-
-        dockerRunning = testDockerRunning( client );
-        RuntimeConfig.DOCKER_INSTANCES.getWithId( ConfigDocker.class, instanceId ).setDockerRunning( dockerRunning );
-
-        if ( dockerRunning ) {
-            updateUsedValues( client );
-        }
-    }
-
-
-    private void updateUsedValues( DockerClient client ) {
-        client.listImagesCmd().exec().forEach( image -> {
-            if ( image.getRepoTags() != null ) {
-                for ( String tag : image.getRepoTags() ) {
-                    String[] splits = tag.split( ":" );
-
-                    availableImages.add( new Image( splits[0], splits[1] ) );
-                }
-            }
-        } );
-
-        Map<String, Boolean> idsToRemove = new HashMap<>();
-        Catalog catalog = Catalog.getInstance();
-
-        outer:
-        for ( com.github.dockerjava.api.model.Container container : client.listContainersCmd().withShowAll( true ).exec() ) {// docker returns the names with a prefixed "/", so we remove it
-            List<String> names = Arrays
-                    .stream( container.getNames() )
-                    .map( cont -> cont.substring( 1 ) )
-                    .collect( Collectors.toList() );
-
-            List<String> normalizedNames = names.stream().map( Container::getFromPhysicalName ).collect( Collectors.toList() );
-
-            // when we have old containers, which belonged to a non-consistent adapter we remove them
-
-            for ( String name : names ) {
-                String[] splits = name.split( "_polypheny_" );
-                if ( splits.length == 2 ) {
-                    String unparsedAdapterId = splits[1];
-                    boolean isTestContainer = splits[1].contains( "_test" );
-                    // if the container was annotate with "_test", it has to be deleted if a new run in testMode was started
-                    if ( isTestContainer ) {
-                        unparsedAdapterId = unparsedAdapterId.replace( "_test", "" );
-                    }
-
-                    int adapterId = Integer.parseInt( unparsedAdapterId );
-                    if ( !catalog.checkIfExistsAdapter( adapterId ) || !catalog.getAdapter( adapterId ).uniqueName.equals( splits[0] ) || isTestContainer ) {
-                        idsToRemove.put( container.getId(), container.getState().equalsIgnoreCase( "running" ) );
-                        // as we remove this container later we skip the name and port adding
-                        continue outer;
-                    }
-                }
-            }
-
-            Arrays.stream( container.getPorts() ).forEach( containerPort -> usedPorts.add( containerPort.getPublicPort() ) );
-            usedNames.addAll( normalizedNames );
-        }
-
-        // we have to check if we accessed a mocking catalog as we don't want to remove all dockerInstance when running tests
-
-        idsToRemove.forEach( ( id, isRunning ) -> {
-            if ( isRunning ) {
-                client.stopContainerCmd( id ).exec();
-            }
-            client.removeContainerCmd( id ).exec();
-        } );
-    }
-
-
-    private DockerClient generateClient( int instanceId ) {
-        ConfigDocker settings = RuntimeConfig.DOCKER_INSTANCES.getWithId( ConfigDocker.class, instanceId );
-
-        String host;
-        if ( settings.getProtocol().equals( "ssh" ) ) {
-            if ( settings.getUsername() == null ) {
-                throw new RuntimeException( "To use a ssh connection for Docker a username is needed." );
-            }
-            host = "ssh://" + settings.getUsername() + "@" + settings.getHost();
-        } else {
-            host = "tcp://" + settings.getHost() + ":" + settings.getPort();
-        }
-
-        Builder builder = DefaultDockerClientConfig
-                .createDefaultConfigBuilder()
-                .withDockerHost( host );
-        if ( !settings.isUsingInsecure() ) {
-            builder
-                    .withDockerTlsVerify( true )
-                    .withDockerCertPath( FileSystemManager.getInstance().registerNewFolder( "certs/" + settings.getHost() + "/client" ).getPath() );
-        }
-
-        DockerClientConfig config = builder.build();
-
-        ApacheDockerHttpClient httpClient = new ApacheDockerHttpClient.Builder()
-                .dockerHost( config.getDockerHost() )
-                .sslConfig( config.getSSLConfig() )
-                .build();
-
-        return DockerClientImpl.getInstance( config, httpClient );
-    }
-
-
-    private boolean testDockerRunning( DockerClient client ) {
+        this.host = host;
+        this.dockerInstanceUuid = null;
         try {
-            return null != client.infoCmd().exec();
-        } catch ( Exception e ) {
+            checkConnection();
+        } catch ( IOException e ) {
+            log.error( "Could not connect to docker instance {}: {}", host.alias(), e.getMessage() );
+        }
+    }
+
+
+    private void connectToDocker() throws IOException {
+        this.client = PolyphenyDockerClient.connect( "docker", host.hostname(), host.communicationPort() );
+        this.client.ping();
+    }
+
+
+    private void handleNewDockerInstance() throws IOException {
+        this.dockerInstanceUuid = this.client.getDockerId();
+
+        // seenUuids is used to synchronize with other DockerInstance instances
+        synchronized ( seenInstanceUuids ) {
+            for ( DockerInstance instance : DockerManager.getInstance().getDockerInstances().values() ) {
+                if ( instance != this && instance.dockerInstanceUuid != null && instance.dockerInstanceUuid.equals( dockerInstanceUuid ) ) {
+                    throw new DockerUserException( String.format( "Already connected to instance at '%s' with alias '%s'", this.host.hostname(), instance.host.alias() ) );
+                }
+            }
+        }
+        // What follows here is only to clean up old containers when Polypheny is reset.
+        boolean first;
+        synchronized ( seenInstanceUuids ) {
+            first = seenInstanceUuids.add( this.dockerInstanceUuid );
+        }
+
+        if ( first && (Catalog.resetDocker || Catalog.resetCatalog) ) {
+            this.client.listContainers().forEach(
+                    containerInfo -> {
+                        try {
+                            this.client.deleteContainer( containerInfo.getUuid() );
+                        } catch ( IOException e ) {
+                            log.error( "Failed to delete container {}", containerInfo.getUuid(), e );
+                        }
+                    }
+            );
+        }
+    }
+
+
+    private void checkConnection() throws IOException {
+        synchronized ( this ) {
+            if ( status != Status.CONNECTED || client == null || !client.isConnected() ) {
+                connectToDocker();
+            }
+
+            if ( status == Status.NEW ) {
+                handleNewDockerInstance();
+                status = Status.DISCONNECTED; // This is so that the next block is executed as well, but that we never run handleNewDockerInstance again
+            }
+
+            // We only get here, if connectToDocker worked
+            if ( status != Status.CONNECTED ) {
+                Set<String> uuids = new HashSet<>();
+                this.client.listContainers().forEach( c -> {
+                    uuids.add( c.getUuid() );
+                    new DockerContainer( c.getUuid(), c.getName() );
+                } );
+                this.containerUuids = uuids;
+                status = Status.CONNECTED;
+            } else {
+                client.ping();
+            }
+        }
+    }
+
+
+    boolean isConnected() {
+        try {
+            checkConnection();
+            return true;
+        } catch ( IOException ignore ) {
             return false;
         }
     }
 
 
-    protected boolean checkIfUnique( String uniqueName ) {
-        return !availableContainers.containsKey( uniqueName );
-    }
-
-
-    private void registerIfAbsent( Container container ) {
-        if ( !availableContainers.containsKey( container.uniqueName ) ) {
-            availableContainers.put( container.uniqueName, container );
-
-            if ( container.adapterId == null ) {
-                return;
-            }
-
-            if ( !containersOnAdapter.containsKey( container.adapterId ) ) {
-                containersOnAdapter.put( container.adapterId, ImmutableList.of( container.uniqueName ) );
-            } else {
-                List<String> containerNames = new ArrayList<>( containersOnAdapter.get( container.adapterId ) );
-                containerNames.add( container.uniqueName );
-                containersOnAdapter.put( container.adapterId, ImmutableList.copyOf( containerNames ) );
-            }
-        }
-    }
-
-
-    @Override
-    public Container initialize( Container container ) {
-        if ( !usedNames.contains( container.uniqueName ) ) {
-            initContainer( container );
-        }
-        if ( !availableImages.contains( container.image ) ) {
-            download( container.image );
-        }
-
-        // we add the name and the ports to our book-keeping functions as all previous checks passed
-        // both get added above but the port is not always visible, e.g. when container is stopped
-        usedPorts.addAll( container.internalExternalPortMapping.values() );
-        usedNames.add( container.uniqueName );
-        registerIfAbsent( container );
-
-        return container;
-    }
-
-
-    @Override
-    public void start( Container container ) {
-        registerIfAbsent( container );
-
-        if ( container.getStatus() == ContainerStatus.DESTROYED ) {
-            // we got an already destroyed container which we have to recreate in Docker and call this method again
-            initialize( container ).start();
-            return;
-        }
-
-        // we have to check if the container is running and start it if its not
-        InspectContainerResponse containerInfo = client.inspectContainerCmd( "/" + container.getPhysicalName() ).exec();
-        ContainerState state = containerInfo.getState();
-        if ( Objects.equals( state.getStatus(), "exited" ) ) {
-            client.startContainerCmd( container.getPhysicalName() ).exec();
-        } else if ( Objects.equals( state.getStatus(), "created" ) ) {
-            client.startContainerCmd( container.getPhysicalName() ).exec();
-
-            // while the container is started the underlying system is not, so we have to probe it multiple times
-            waitTillStarted( container );
-
-            if ( container.afterCommands.size() != 0 ) {
-                execAfterInitCommands( container );
-            }
-        }
-
-        container.setContainerId( containerInfo.getId() );
-        container.setStatus( ContainerStatus.RUNNING );
-    }
-
-
-    /**
-     * The container gets probed until the defined ready supplier returns true or the timout is reached
-     *
-     * @param container the container which is waited for
-     */
-    private void waitTillStarted( Container container ) {
-        StopWatch stopWatch = new StopWatch();
-        stopWatch.start();
-        boolean isStarted = container.isReadySupplier.get();
-        while ( !isStarted && (stopWatch.getTime() < container.maxTimeoutMs) ) {
+    public void reconnect() {
+        synchronized ( this ) {
             try {
-                TimeUnit.MILLISECONDS.sleep( 500 );
-            } catch ( InterruptedException e ) {
+                if ( status != Status.NEW ) {
+                    status = Status.DISCONNECTED;
+                }
+                checkConnection();
+            } catch ( IOException e ) {
+                log.info( "Failed to reconnect: {}", String.valueOf( e ) );
+            }
+        }
+    }
+
+
+    public void ping() {
+        synchronized ( this ) {
+            if ( status == Status.CONNECTED && client != null && client.isConnected() ) {
+                try {
+                    client.ping();
+                } catch ( IOException e ) {
+                    throw new DockerUserException( e );
+                }
+            } else {
+                throw new DockerUserException( "Not connected" );
+            }
+        }
+    }
+
+
+    public DockerInstanceInfo getInfo() {
+        synchronized ( this ) {
+            int numberOfContainers = -1;
+            try {
+                if ( client != null ) {
+                    numberOfContainers = client.listContainers().size();
+                }
+            } catch ( IOException e ) {
                 // ignore
             }
-            isStarted = container.isReadySupplier.get();
+            return new DockerInstanceInfo( instanceId, status == Status.CONNECTED, numberOfContainers, host );
         }
-        stopWatch.stop();
-        if ( !isStarted ) {
-            destroy( container );
-            throw new RuntimeException( "The Docker container could not be started correctly." );
+    }
+
+
+    void startContainer( DockerContainer container ) throws IOException {
+        synchronized ( this ) {
+            client.startContainer( container.getContainerId() );
+        }
+    }
+
+
+    void stopContainer( DockerContainer container ) throws IOException {
+        synchronized ( this ) {
+            client.stopContainer( container.getContainerId() );
         }
     }
 
 
     /**
-     * This executes multiple defined commands after a delay in the given container
-     *
-     * @param container the container with specifies the afterCommands and to which they are applied
+     * Destroy the container.  Local resources are cleaned up regardless of whether the deallocation on the docker host
+     * actually succeeded.
      */
-    private void execAfterInitCommands( Container container ) {
-
-        ExecCreateCmdResponse cmd = client
-                .execCreateCmd( container.getContainerId() )
-                .withAttachStdout( true )
-                .withCmd( container.afterCommands.toArray( new String[0] ) )
-                .exec();
-
-        ResultCallbackTemplate<ResultCallback<Frame>, Frame> callback = new ResultCallbackTemplate<ResultCallback<Frame>, Frame>() {
-            @Override
-            public void onNext( Frame event ) {
-
-            }
-        };
-
-        try {
-            client.execStartCmd( cmd.getId() ).exec( callback ).awaitCompletion();
-        } catch ( InterruptedException e ) {
-            throw new RuntimeException( "The afterCommands for the container where not executed properly." );
-        }
-    }
-
-
-    private void initContainer( Container container ) {
-        if ( !availableImages.contains( container.image ) ) {
-            download( container.image );
-        }
-
-        Ports bindings = new Ports();
-
-        for ( Map.Entry<Integer, Integer> mapping : container.internalExternalPortMapping.entrySet() ) {
-            // ExposedPort is exposed from container and Binding is port from outside
-            bindings.bind( ExposedPort.tcp( mapping.getKey() ), Ports.Binding.bindPort( mapping.getValue() ) );
-            if ( usedPorts.contains( mapping.getValue() ) ) {
-                throw new PortInUseRuntimeException();
+    void destroyContainer( DockerContainer container ) {
+        synchronized ( this ) {
+            try {
+                containerUuids.remove( container.getContainerId() );
+                client.deleteContainer( container.getContainerId() );
+            } catch ( IOException e ) {
+                if ( e.getMessage().startsWith( "No such container" ) ) {
+                    log.info( "Cannot delete container: No container with UUID {}", container.getContainerId() );
+                } else {
+                    log.error( "Failed to delete container with UUID {}", container.getContainerId(), e );
+                }
             }
         }
-
-        if ( usedNames.contains( container.uniqueName ) ) {
-            throw new NameExistsRuntimeException();
-        }
-
-        CreateContainerCmd cmd = client.createContainerCmd( container.image.getFullName() )
-                .withName( Container.getPhysicalUniqueName( container ) )
-                .withCmd( container.initCommands )
-                .withEnv( container.envCommands )
-                .withExposedPorts( container.getExposedPorts() );
-
-        Objects.requireNonNull( cmd.getHostConfig() ).withPortBindings( bindings );
-        CreateContainerResponse response = cmd.exec();
-        container.setContainerId( response.getId() );
     }
 
 
-    /**
-     * Tries to download the provided image through Docker,
-     * this is necessary to have it accessible when later generating a
-     * container from it
-     *
-     * If the image is already downloaded nothing happens
-     */
-    public void download( Image image ) {
-        PullImageResultCallback callback = new PullImageResultCallback();
-        client.pullImageCmd( image.getFullName() ).exec( callback );
-
-        // TODO: blocking for now, maybe change or show warning?
-        try {
-            callback.awaitCompletion();
-        } catch ( InterruptedException e ) {
-            throw new RuntimeException( "The downloading of the image  " + image.getFullName() + " failed." );
-        }
-
-        availableImages.add( image );
-    }
-
-
-    @Override
-    public void stopAll( int adapterId ) {
-        if ( containersOnAdapter.containsKey( adapterId ) ) {
-            containersOnAdapter.get( adapterId ).forEach( containerName -> availableContainers.get( containerName ).stop() );
-        }
-
-    }
-
-
-    @Override
-    public void destroyAll( int adapterId ) {
-        if ( containersOnAdapter.containsKey( adapterId ) ) {
-            containersOnAdapter.get( adapterId ).forEach( containerName -> availableContainers.get( containerName ).destroy() );
+    int execute( DockerContainer container, List<String> cmd ) throws IOException {
+        synchronized ( this ) {
+            return client.executeCommand( container.getContainerId(), cmd );
         }
     }
 
 
-    @Override
-    public Map<Integer, List<Integer>> getUsedPortsSorted() {
-        HashMap<Integer, List<Integer>> map = new HashMap<>();
-        map.put( instanceId, getUsedPorts() );
-        return map;
-    }
-
-
-    @Override
-    protected void updateConfigs() {
-        ConfigDocker newConfig = RuntimeConfig.DOCKER_INSTANCES.getWithId( ConfigDocker.class, instanceId );
-        if ( !currentConfig.equals( newConfig ) ) {
-            // something changed and we need to get a new client, which matches the new config
-            this.client = generateClient( instanceId );
-            this.dockerRunning = testDockerRunning( instanceId );
-            RuntimeConfig.DOCKER_INSTANCES.getWithId( ConfigDocker.class, instanceId ).setDockerRunning( dockerRunning );
+    Map<Integer, Integer> getPorts( DockerContainer container ) throws IOException {
+        synchronized ( this ) {
+            return client.getPorts( Collections.singletonList( container.getContainerId() ) ).getOrDefault( container.getContainerId(), Map.of() );
         }
-        currentConfig = newConfig;
     }
 
 
-    @Override
-    public boolean testDockerRunning( int dockerId ) {
-        if ( dockerId != instanceId ) {
-            throw new RuntimeException( "There was a problem retrieving the correct DockerInstance" );
+    boolean hasContainer( String uuid ) {
+        synchronized ( this ) {
+            return containerUuids.contains( uuid );
         }
-        return testDockerRunning( client );
     }
 
 
-    @Override
-    public void stop( Container container ) {
-        client.stopContainerCmd( container.getPhysicalName() ).exec();
-        container.setStatus( ContainerStatus.STOPPED );
+    boolean hasContainers() throws IOException {
+        synchronized ( this ) {
+            if ( client == null ) {
+                throw new IOException( "Client not connected" );
+            }
+            return !client.listContainers().isEmpty();
+        }
     }
 
 
-    @Override
-    public void destroy( Container container ) {
+    Optional<HandshakeInfo> updateConfig( String hostname, String alias, String registry ) {
+        synchronized ( this ) {
+            DockerHost newHost = new DockerHost( hostname, alias, registry, this.getHost().communicationPort(), this.getHost().handshakePort(), this.getHost().proxyPort() );
+            if ( !this.host.hostname().equals( hostname ) ) {
+                client.close();
+                status = Status.NEW;
+                // TODO: Copy/Move keys...
+                // TODO: Restart all proxy connections
+                try {
+                    this.host = newHost;
+                    checkConnection();
+                } catch ( IOException e ) {
+                    log.info( "Failed to connect to '{}': {}", hostname, e.getMessage() );
+                    return Optional.of( HandshakeManager.getInstance().newHandshake( newHost, null, true ) );
+                }
+            }
+            this.host = newHost;
+            return Optional.empty();
+        }
+    }
 
-        // while testing the container status itself is possible, in error cases there might be no status set
-        // so we have to test by retrieving the container again from the client
-        if ( Objects.requireNonNull(
-                client.inspectContainerCmd( container.getContainerId() ).exec()
-                        .getState()
-                        .getStatus() )
-                .equalsIgnoreCase( "running" ) ) {
-            stop( container );
+
+    void close() {
+        synchronized ( this ) {
+            if ( client != null ) {
+                client.close();
+                client = null;
+            }
+            if ( status != Status.NEW ) {
+                status = Status.DISCONNECTED;
+            }
+        }
+    }
+
+
+    public ContainerBuilder newBuilder( String imageName, String uniqueName ) {
+        return new ContainerBuilder( imageName, uniqueName );
+    }
+
+
+    public class ContainerBuilder {
+
+        private final String uniqueName;
+        private final String imageName;
+        private List<String> initCommand = List.of();
+        private final List<Integer> exposedPorts = new ArrayList<>();
+        private final Map<String, String> environmentVariables = new HashMap<>();
+
+
+        private ContainerBuilder( String imageName, String uniqueName ) {
+            this.imageName = imageName;
+            this.uniqueName = uniqueName;
         }
 
-        client.removeContainerCmd( container.getPhysicalName() ).withRemoveVolumes( true ).exec();
-        container.setStatus( ContainerStatus.DESTROYED );
 
-        usedNames.remove( container.uniqueName );
-        usedPorts.removeAll( container.getExposedPorts().stream().map( ExposedPort::getPort ).collect( Collectors.toList() ) );
-        List<String> adapterContainers = containersOnAdapter
-                .get( container.adapterId )
-                .stream()
-                .filter( cont -> !cont.equals( container.uniqueName ) )
-                .collect( Collectors.toList() );
-        containersOnAdapter.replace( container.adapterId, ImmutableList.copyOf( adapterContainers ) );
-        availableContainers.remove( container.uniqueName );
-    }
+        public ContainerBuilder withExposedPort( int port ) {
+            exposedPorts.add( port );
+            return this;
+        }
 
 
-    // non-conflicting initializer for DockerManagerImpl()
-    protected DockerInstance generateNewSession( int instanceId ) {
-        return new DockerInstance( instanceId );
+        public ContainerBuilder withEnvironmentVariable( String key, String value ) {
+            environmentVariables.put( key, value );
+            return this;
+        }
+
+
+        public ContainerBuilder withCommand( List<String> cmd ) {
+            initCommand = cmd;
+            return this;
+        }
+
+
+        public DockerContainer createAndStart() throws IOException {
+            synchronized ( DockerInstance.this ) {
+                final String registry = host.getRegistryOrDefault();
+
+                final String imageNameWithRegistry;
+                if ( registry.isEmpty() || registry.endsWith( "/" ) ) {
+                    imageNameWithRegistry = registry + imageName;
+                } else {
+                    imageNameWithRegistry = registry + "/" + imageName;
+                }
+
+                String uuid = client.createAndStartContainer( DockerContainer.getPhysicalUniqueName( uniqueName ), imageNameWithRegistry, exposedPorts, initCommand, environmentVariables, List.of() );
+                containerUuids.add( uuid );
+                return new DockerContainer( uuid, uniqueName );
+            }
+        }
+
     }
 
 }

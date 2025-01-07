@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,25 +13,36 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.polypheny.db.partition;
 
-import org.polypheny.db.catalog.Catalog;
 
-public class PartitionManagerFactory {
+import org.polypheny.db.catalog.logistic.PartitionType;
 
-    public PartitionManager getInstance( Catalog.PartitionType partitionType ) {
-        switch ( partitionType ) {
-            case HASH:
-                return new HashPartitionManager();
 
-            case LIST:
-                return new ListPartitionManager();
+public abstract class PartitionManagerFactory {
 
-            case RANGE:
-                return new RangePartitionManager();
+
+    public static PartitionManagerFactory INSTANCE = null;
+
+
+    public static PartitionManagerFactory setAndGetInstance( PartitionManagerFactory factory ) {
+        if ( INSTANCE != null ) {
+            throw new RuntimeException( "Setting the PartitionManager, when already set is not permitted." );
         }
-
-        throw new RuntimeException( "Unknown partition type: " + partitionType );
+        INSTANCE = factory;
+        return INSTANCE;
     }
+
+
+    public static PartitionManagerFactory getInstance() {
+        if ( INSTANCE == null ) {
+            throw new RuntimeException( "PartitionManager was not set correctly on Polypheny-DB start-up" );
+        }
+        return INSTANCE;
+    }
+
+
+    public abstract PartitionManager getPartitionManager( PartitionType partitionType );
 
 }

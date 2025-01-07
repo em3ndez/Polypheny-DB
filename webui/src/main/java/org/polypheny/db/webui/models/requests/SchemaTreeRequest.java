@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,10 +17,21 @@
 package org.polypheny.db.webui.models.requests;
 
 
+import java.util.List;
+import lombok.experimental.SuperBuilder;
+import lombok.extern.jackson.Jacksonized;
+import org.polypheny.db.catalog.logistic.DataModel;
+
+@Jacksonized
+@SuperBuilder
 public class SchemaTreeRequest extends UIRequest {
 
     public String routerLinkRoot;
     public boolean views;
     public int depth;
     public boolean showTable;
+
+    public List<DataModel> dataModels;
+
+
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,29 +34,30 @@
 package org.polypheny.db.rex;
 
 
-import java.io.Serializable;
 import java.util.Collection;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.sql.SqlKind;
+import org.polypheny.db.algebra.constant.Kind;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.nodes.Node;
+import org.polypheny.db.util.Wrapper;
 
 
 /**
  * Row expression.
  *
- * Every row-expression has a type. (Compare with {@link org.polypheny.db.sql.SqlNode}, which is created before validation, and therefore types may not be available.)
+ * Every row-expression has a type. (Compare with {@link Node}, which is created before validation, and therefore types may not be available.)
  *
  * Some common row-expressions are: {@link RexLiteral} (constant value), {@link RexVariable} (variable), {@link RexCall} (call to operator with operands).
  * Expressions are generally created using a {@link RexBuilder} factory.
  *
  * All sub-classes of RexNode are immutable.
  */
-public abstract class RexNode implements Serializable {
+public abstract class RexNode implements Wrapper {
 
     // Effectively final. Set in each sub-class constructor, and never re-set.
     protected String digest;
 
 
-    public abstract RelDataType getType();
+    public abstract AlgDataType getType();
 
 
     /**
@@ -75,12 +76,12 @@ public abstract class RexNode implements Serializable {
     }
 
 
-    public boolean isA( SqlKind kind ) {
+    public boolean isA( Kind kind ) {
         return getKind() == kind;
     }
 
 
-    public boolean isA( Collection<SqlKind> kinds ) {
+    public boolean isA( Collection<Kind> kinds ) {
         return getKind().belongsTo( kinds );
     }
 
@@ -90,8 +91,8 @@ public abstract class RexNode implements Serializable {
      *
      * @return Node kind, never null
      */
-    public SqlKind getKind() {
-        return SqlKind.OTHER;
+    public Kind getKind() {
+        return Kind.OTHER;
     }
 
 
@@ -101,14 +102,14 @@ public abstract class RexNode implements Serializable {
 
 
     /**
-     * Accepts a visitor, dispatching to the right overloaded {@link RexVisitor#visitInputRef visitXxx} method.
+     * Accepts a visitor, dispatching to the right overloaded {@link RexVisitor#visitIndexRef visitXxx} method.
      *
      * Also see {@link RexUtil#apply(RexVisitor, java.util.List, RexNode)}, which applies a visitor to several expressions simultaneously.
      */
     public abstract <R> R accept( RexVisitor<R> visitor );
 
     /**
-     * Accepts a visitor with a payload, dispatching to the right overloaded {@link RexBiVisitor#visitInputRef(RexInputRef, Object)} visitXxx} method.
+     * Accepts a visitor with a payload, dispatching to the right overloaded {@link RexBiVisitor#visitInputRef(RexIndexRef, Object)} visitXxx} method.
      */
     public abstract <R, P> R accept( RexBiVisitor<R, P> visitor, P arg );
 

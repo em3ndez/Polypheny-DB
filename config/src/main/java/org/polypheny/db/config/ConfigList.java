@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,29 +16,32 @@
 
 package org.polypheny.db.config;
 
+import com.google.common.collect.ImmutableList;
 import com.google.gson.annotations.SerializedName;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 import org.polypheny.db.config.exception.ConfigRuntimeException;
 
 /**
- * In contrast to Arrays, List of different Objects have the same erasure to Java
- * to counteract that, we have to use a different pattern as in the other ConfigTypes
+ * In contrast to Arrays, List of different objects have the same erasure to Java.
+ * To counteract that, we have to use a different pattern as in the other ConfigTypes.
  */
 public class ConfigList extends Config {
 
     @SerializedName("values")
-    List<ConfigScalar> list;
+    private List<ConfigScalar> list;
+    private List<ConfigScalar> oldList;
+    private List<ConfigScalar> defaultList;
 
-    ConfigScalar template;
+    private ConfigScalar template;
 
     /**
-     * listener which propagates the changes to underlying configs to
-     * listeners of this config
+     * Listener which propagates the changes to underlying configs to listeners of this config.
      */
     ConfigListener listener = new ConfigListener() {
         @Override
@@ -54,8 +57,8 @@ public class ConfigList extends Config {
     };
 
 
-    // while java does not known if our cast are correct
-    // we know, so we can suppress here
+    // While java does not know if our casts are correct
+    // we know, so we can suppress them here
     @SuppressWarnings("unchecked")
     public ConfigList( String key, final List<?> list, Class<?> clazz ) {
         super( key );
@@ -74,13 +77,15 @@ public class ConfigList extends Config {
             booleanList( key, (List<Boolean>) list );
         } else if ( clazz.equals( ConfigDocker.class ) ) {
             dockerList( key, (List<ConfigDocker>) list );
+        } else if ( clazz.equals( ConfigPlugin.class ) ) {
+            pluginList( key, (List<ConfigPlugin>) list );
         } else {
             throw new UnsupportedOperationException( "A ConfigList, which uses that that type is not supported." );
         }
     }
 
 
-    public void integerList( String key, final List<Integer> list ) {
+    private void integerList( String key, final List<Integer> list ) {
         List<ConfigScalar> fill = new ArrayList<>();
         for ( int i = 0; i < list.size(); i++ ) {
             fill.add( (ConfigScalar) new ConfigInteger( key + "." + i, list.get( i ) ).isObservable( false ) );
@@ -88,10 +93,11 @@ public class ConfigList extends Config {
 
         this.template = (ConfigScalar) new ConfigInteger( key + ".", 0 ).isObservable( false );
         this.list = fill;
+        this.defaultList = ImmutableList.copyOf( this.list );
     }
 
 
-    public void doubleList( String key, final List<Double> list ) {
+    private void doubleList( String key, final List<Double> list ) {
         List<ConfigScalar> fill = new ArrayList<>();
         for ( int i = 0; i < list.size(); i++ ) {
             fill.add( (ConfigScalar) new ConfigDouble( key + "." + i, list.get( i ) ).isObservable( false ) );
@@ -99,10 +105,11 @@ public class ConfigList extends Config {
 
         this.template = (ConfigScalar) new ConfigDouble( key + ".", 0 ).isObservable( false );
         this.list = fill;
+        this.defaultList = ImmutableList.copyOf( this.list );
     }
 
 
-    public void longList( String key, final List<Long> list ) {
+    private void longList( String key, final List<Long> list ) {
         List<ConfigScalar> fill = new ArrayList<>();
         for ( int i = 0; i < list.size(); i++ ) {
             fill.add( (ConfigScalar) new ConfigLong( key + "." + i, list.get( i ) ).isObservable( false ) );
@@ -110,10 +117,11 @@ public class ConfigList extends Config {
 
         this.template = (ConfigScalar) new ConfigLong( key + ".", 0 ).isObservable( false );
         this.list = fill;
+        this.defaultList = ImmutableList.copyOf( this.list );
     }
 
 
-    public void decimalList( String key, final List<BigDecimal> list ) {
+    private void decimalList( String key, final List<BigDecimal> list ) {
         List<ConfigScalar> fill = new ArrayList<>();
         for ( int i = 0; i < list.size(); i++ ) {
             fill.add( (ConfigScalar) new ConfigDecimal( key + "." + i, list.get( i ) ).isObservable( false ) );
@@ -121,10 +129,11 @@ public class ConfigList extends Config {
 
         this.template = (ConfigScalar) new ConfigDecimal( key + ".", BigDecimal.ONE ).isObservable( false );
         this.list = fill;
+        this.defaultList = ImmutableList.copyOf( this.list );
     }
 
 
-    public void stringList( String key, final List<String> list ) {
+    private void stringList( String key, final List<String> list ) {
         List<ConfigScalar> fill = new ArrayList<>();
         for ( int i = 0; i < list.size(); i++ ) {
             fill.add( (ConfigScalar) new ConfigString( key + "." + i, list.get( i ) ).isObservable( false ) );
@@ -132,10 +141,11 @@ public class ConfigList extends Config {
 
         this.template = (ConfigScalar) new ConfigString( key + ".", "" ).isObservable( false );
         this.list = fill;
+        this.defaultList = ImmutableList.copyOf( this.list );
     }
 
 
-    public void booleanList( String key, final List<Boolean> list ) {
+    private void booleanList( String key, final List<Boolean> list ) {
         List<ConfigScalar> fill = new ArrayList<>();
         for ( int i = 0; i < list.size(); i++ ) {
             fill.add( (ConfigScalar) new ConfigBoolean( key + "." + i, list.get( i ) ).isObservable( false ) );
@@ -143,18 +153,64 @@ public class ConfigList extends Config {
 
         this.template = (ConfigScalar) new ConfigBoolean( key + ".", false ).isObservable( false );
         this.list = fill;
+        this.defaultList = ImmutableList.copyOf( this.list );
     }
 
 
-    public void dockerList( String key, final List<ConfigDocker> list ) {
-        this.template = new ConfigDocker( "localhost", null, null );
+    private void dockerList( String key, final List<ConfigDocker> list ) {
+        this.template = new ConfigDocker( "localhost", null );
+        this.list = list.stream().map( el -> (ConfigScalar) el ).toList();
+        this.defaultList = ImmutableList.copyOf( this.list );
+    }
+
+
+    private void pluginList( String key, List<ConfigPlugin> list ) {
+        this.template = new ConfigPlugin( "", PluginStatus.UNLOADED, "", List.of(), "This is empty", "0.0.1", false, false );
         this.list = list.stream().map( el -> (ConfigScalar) el ).collect( Collectors.toList() );
+        this.defaultList = ImmutableList.copyOf( this.list );
     }
 
 
     @Override
     public <T> List<T> getList( Class<T> type ) {
         return list.stream().map( type::cast ).collect( Collectors.toList() );
+    }
+
+
+    @Override
+    public Object getPlainValueObject() {
+        return list;
+    }
+
+
+    @Override
+    public Object getDefaultValue() {
+        return defaultList;
+    }
+
+
+    /**
+     * Checks if the currently set config value, is equal to the system configured default.
+     * If you want to reset it to the configured defaultValue use {@link #resetToDefault()}.
+     * To change the systems default value you can use: {@link #changeDefaultValue(Object)}.
+     *
+     * @return true if it is set to default, false if it deviates
+     */
+    @Override
+    public boolean isDefault() {
+        return defaultList.containsAll( list ) && list.containsAll( defaultList );
+    }
+
+
+    /**
+     * Restores the current value to the system configured default value.
+     *
+     * To obtain the system configured defaultValue use {@link #getDefaultValue()}.
+     * If you want to check if the current value deviates from default use: {@link #isDefault()}.
+     */
+    @Override
+    public void resetToDefault() {
+        setList( ImmutableList.copyOf( defaultList ) );
     }
 
 
@@ -201,7 +257,7 @@ public class ConfigList extends Config {
 
 
     @Override
-    public boolean setConfigObjectList( List<Object> values, Class<? extends ConfigScalar> clazz ) {
+    public Feedback setConfigObjectList( List<Object> values, Class<? extends ConfigScalar> clazz ) {
         BiFunction<String, Object, ? extends ConfigScalar> setter;
         if ( clazz.equals( ConfigString.class ) ) {
             setter = ( key, value ) -> new ConfigString( key, (String) value );
@@ -217,8 +273,10 @@ public class ConfigList extends Config {
             setter = ( key, value ) -> new ConfigBoolean( key, (Boolean) value );
         } else if ( clazz.equals( ConfigDocker.class ) ) {
             setter = ( key, value ) -> ConfigDocker.fromMap( (Map<String, Object>) value );
+        } else if ( clazz.equals( ConfigPlugin.class ) ) {
+            setter = ( key, value ) -> ConfigPlugin.fromMap( (Map<String, Object>) value );
         } else {
-            return false;
+            return Feedback.of( false, "The element of the list of configs was not recognized." );
         }
         return setConfigObjectList( values, setter );
     }
@@ -226,36 +284,68 @@ public class ConfigList extends Config {
 
     @Override
     public void setList( List<ConfigScalar> values ) {
+        if ( requiresRestart() ) {
+            if ( this.oldList == null ) {
+                this.oldList = this.list;
+            }
+        }
         this.list = values;
         values.forEach( val -> val.addObserver( listener ) );
+        if ( this.oldList != null && this.oldList.equals( this.list ) ) {
+            this.oldList = null;
+        }
         notifyConfigListeners();
     }
 
 
-    private boolean setConfigObjectList( List<Object> values, BiFunction<String, Object, ? extends ConfigScalar> scalarGetter ) {
+    private Feedback setConfigObjectList( List<Object> values, BiFunction<String, Object, ? extends ConfigScalar> scalarGetter ) {
         List<ConfigScalar> temp = new ArrayList<>();
+
+        if ( requiresRestart() ) {
+            if ( this.oldList == null ) {
+                this.oldList = this.list;
+            }
+        }
+
         for ( int i = 0; i < values.size(); i++ ) {
             if ( validate( values.get( i ) ) ) {
                 Map<String, Object> value = (Map<String, Object>) values.get( i );
                 temp.add( i, scalarGetter.apply( (String) value.get( "key" ), value.getOrDefault( "value", value ) ) );
-
             } else {
-                return false;
+                return Feedback.of( false, String.format( "Value %s is not valid for the given config.", values.get( i ) ) );
             }
         }
         this.list.forEach( val -> val.removeObserver( listener ) );
-
         this.list = temp;
-
         this.list.forEach( val -> val.addObserver( listener ) );
-        notifyConfigListeners();
-        return true;
+        if ( this.oldList != null && this.oldList.equals( this.list ) ) {
+            this.oldList = null;
+        }
+        try {
+            notifyConfigListeners();
+            return Feedback.of( true );
+        } catch ( Exception e ) {
+            return Feedback.of( false, e.getMessage() );
+        }
     }
 
 
     @Override
     void setValueFromFile( com.typesafe.config.Config conf ) {
-        throw new ConfigRuntimeException( "Reading list of values from config files is not supported yet." );
+
+        List<Object> tempList = new ArrayList<>();
+        com.typesafe.config.Config listConf = conf.getConfig( getKey() );
+        for ( Entry<String, Object> nested : listConf.root().unwrapped().entrySet() ) {
+            if ( template instanceof ConfigDocker ) {
+                tempList.add( ConfigDocker.parseConfigToMap( listConf.getConfig( nested.getKey() ) ) );
+            } else if ( template instanceof ConfigPlugin ) {
+                tempList.add( ConfigPlugin.parseConfigToMap( listConf.getConfig( nested.getKey() ) ) );
+            } else {
+                throw new ConfigRuntimeException( "Reading list of values from config files is not supported yet." );
+            }
+
+        }
+        setConfigObjectList( tempList, getTemplateClass() );
     }
 
 

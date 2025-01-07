@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,19 +44,21 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
 import org.polypheny.db.adapter.DataContext;
-import org.polypheny.db.rel.type.RelDataType;
+import org.polypheny.db.algebra.constant.Kind;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.nodes.Function.FunctionType;
+import org.polypheny.db.nodes.Operator;
 import org.polypheny.db.rex.RexBuilder;
 import org.polypheny.db.rex.RexCall;
 import org.polypheny.db.rex.RexExecutable;
 import org.polypheny.db.rex.RexExecutorImpl;
-import org.polypheny.db.rex.RexInputRef;
+import org.polypheny.db.rex.RexIndexRef;
 import org.polypheny.db.rex.RexNode;
 import org.polypheny.db.rex.RexUtil;
 import org.polypheny.db.rex.RexVisitorImpl;
-import org.polypheny.db.sql.SqlKind;
-import org.polypheny.db.sql.SqlOperator;
-import org.polypheny.db.sql.fun.SqlCastFunction;
+import org.polypheny.db.type.entity.PolyValue;
 import org.polypheny.db.util.Pair;
 
 
@@ -78,10 +80,10 @@ public class RexImplicationChecker {
 
     final RexBuilder builder;
     final RexExecutorImpl executor;
-    final RelDataType rowType;
+    final AlgDataType rowType;
 
 
-    public RexImplicationChecker( RexBuilder builder, RexExecutorImpl executor, RelDataType rowType ) {
+    public RexImplicationChecker( RexBuilder builder, RexExecutorImpl executor, AlgDataType rowType ) {
         this.builder = Objects.requireNonNull( builder );
         this.executor = Objects.requireNonNull( executor );
         this.rowType = Objects.requireNonNull( rowType );
@@ -104,7 +106,7 @@ public class RexImplicationChecker {
         }
 
         if ( log.isDebugEnabled() ) {
-            log.debug( "Checking if {} => {}", first.toString(), second.toString() );
+            log.debug( "Checking if {} => {}", first, second.toString() );
         }
 
         // Get DNF
@@ -124,8 +126,8 @@ public class RexImplicationChecker {
         //   z > 90
         //
         // Similarly, decompose CNF into a list of conditions, each of which is a disjunction.
-        List<RexNode> firsts = RelOptUtil.disjunctions( firstDnf );
-        List<RexNode> seconds = RelOptUtil.disjunctions( secondDnf );
+        List<RexNode> firsts = AlgOptUtil.disjunctions( firstDnf );
+        List<RexNode> seconds = AlgOptUtil.disjunctions( secondDnf );
 
         for ( RexNode f : firsts ) {
             // Check if f implies at least one of the conjunctions in list secondDnfs.
@@ -165,13 +167,12 @@ public class RexImplicationChecker {
         if ( implies2( first, second ) ) {
             return true;
         }
-        switch ( first.getKind() ) {
-            case AND:
-                for ( RexNode f : RelOptUtil.conjunctions( first ) ) {
-                    if ( implies2( f, second ) ) {
-                        return true;
-                    }
+        if ( Objects.requireNonNull( first.getKind() ) == Kind.AND ) {
+            for ( RexNode f : AlgOptUtil.conjunctions( first ) ) {
+                if ( implies2( f, second ) ) {
+                    return true;
                 }
+            }
         }
         return false;
     }
@@ -191,23 +192,16 @@ public class RexImplicationChecker {
         }
 
         // Several things imply "IS NOT NULL"
-        switch ( second.getKind() ) {
-            case IS_NOT_NULL:
-                // Suppose we know that first is strong in second; that is, the if second is null, then first will be null.
-                // Then, first being not null implies that second is not null.
-                //
-                // For example, first is "x > y", second is "x".
-                // If we know that "x > y" is not null, we know that "x" is not null.
-                final RexNode operand = ((RexCall) second).getOperands().get( 0 );
-                final Strong strong = new Strong() {
-                    @Override
-                    public boolean isNull( RexNode node ) {
-                        return node.equals( operand ) || super.isNull( node );
-                    }
-                };
-                if ( strong.isNull( first ) ) {
-                    return true;
-                }
+        if ( Objects.requireNonNull( second.getKind() ) == Kind.IS_NOT_NULL ) {
+            // Suppose we know that first is strong in second; that is, the if second is null, then first will be null.
+            // Then, first being not null implies that second is not null.
+            //
+            // For example, first is "x > y", second is "x".
+            // If we know that "x > y" is not null, we know that "x" is not null.
+            final Strong strong = getStrong( (RexCall) second );
+            if ( strong.isNull( first ) ) {
+                return true;
+            }
         }
 
         final InputUsageFinder firstUsageFinder = new InputUsageFinder();
@@ -222,20 +216,20 @@ public class RexImplicationChecker {
             return false;
         }
 
-        ImmutableList.Builder<Set<Pair<RexInputRef, RexNode>>> usagesBuilder = ImmutableList.builder();
-        for ( Map.Entry<RexInputRef, InputRefUsage<SqlOperator, RexNode>> entry : firstUsageFinder.usageMap.entrySet() ) {
-            ImmutableSet.Builder<Pair<RexInputRef, RexNode>> usageBuilder = ImmutableSet.builder();
-            if ( entry.getValue().usageList.size() > 0 ) {
-                for ( final Pair<SqlOperator, RexNode> pair : entry.getValue().usageList ) {
+        ImmutableList.Builder<Set<Pair<RexIndexRef, RexNode>>> usagesBuilder = ImmutableList.builder();
+        for ( Map.Entry<RexIndexRef, InputRefUsage<Operator, RexNode>> entry : firstUsageFinder.usageMap.entrySet() ) {
+            ImmutableSet.Builder<Pair<RexIndexRef, RexNode>> usageBuilder = ImmutableSet.builder();
+            if ( !entry.getValue().usageList.isEmpty() ) {
+                for ( final Pair<Operator, RexNode> pair : entry.getValue().usageList ) {
                     usageBuilder.add( Pair.of( entry.getKey(), pair.getValue() ) );
                 }
                 usagesBuilder.add( usageBuilder.build() );
             }
         }
 
-        final Set<List<Pair<RexInputRef, RexNode>>> usages = Sets.cartesianProduct( usagesBuilder.build() );
+        final Set<List<Pair<RexIndexRef, RexNode>>> usages = Sets.cartesianProduct( usagesBuilder.build() );
 
-        for ( List<Pair<RexInputRef, RexNode>> usageList : usages ) {
+        for ( List<Pair<RexIndexRef, RexNode>> usageList : usages ) {
             // Get the literals from first conjunction and executes second conjunction using them.
             //
             // E.g., for
@@ -255,6 +249,19 @@ public class RexImplicationChecker {
     }
 
 
+    @NotNull
+    private static Strong getStrong( RexCall second ) {
+        final RexNode operand = second.getOperands().get( 0 );
+        final Strong strong = new Strong() {
+            @Override
+            public boolean isNull( RexNode node ) {
+                return node.equals( operand ) || super.isNull( node );
+            }
+        };
+        return strong;
+    }
+
+
     private boolean isSatisfiable( RexNode second, DataContext dataValues ) {
         if ( dataValues == null ) {
             return false;
@@ -263,7 +270,7 @@ public class RexImplicationChecker {
         ImmutableList<RexNode> constExps = ImmutableList.of( second );
         final RexExecutable exec = executor.getExecutable( builder, constExps, rowType );
 
-        Object[] result;
+        PolyValue[] result;
         exec.setDataContext( dataValues );
         try {
             result = exec.execute();
@@ -273,7 +280,7 @@ public class RexImplicationChecker {
             log.warn( "Exception thrown while checking if => {}: {}", second, e.getMessage() );
             return false;
         }
-        return result != null && result.length == 1 && result[0] instanceof Boolean && (Boolean) result[0];
+        return result != null && result.length == 1 && result[0].isBoolean() && result[0].asBoolean().value;
     }
 
 
@@ -296,19 +303,19 @@ public class RexImplicationChecker {
      * @return whether input usage pattern is supported
      */
     private boolean checkSupport( InputUsageFinder firstUsageFinder, InputUsageFinder secondUsageFinder ) {
-        final Map<RexInputRef, InputRefUsage<SqlOperator, RexNode>> firstUsageMap = firstUsageFinder.usageMap;
-        final Map<RexInputRef, InputRefUsage<SqlOperator, RexNode>> secondUsageMap = secondUsageFinder.usageMap;
+        final Map<RexIndexRef, InputRefUsage<Operator, RexNode>> firstUsageMap = firstUsageFinder.usageMap;
+        final Map<RexIndexRef, InputRefUsage<Operator, RexNode>> secondUsageMap = secondUsageFinder.usageMap;
 
-        for ( Map.Entry<RexInputRef, InputRefUsage<SqlOperator, RexNode>> entry : secondUsageMap.entrySet() ) {
-            final InputRefUsage<SqlOperator, RexNode> secondUsage = entry.getValue();
-            final List<Pair<SqlOperator, RexNode>> secondUsageList = secondUsage.usageList;
+        for ( Map.Entry<RexIndexRef, InputRefUsage<Operator, RexNode>> entry : secondUsageMap.entrySet() ) {
+            final InputRefUsage<Operator, RexNode> secondUsage = entry.getValue();
+            final List<Pair<Operator, RexNode>> secondUsageList = secondUsage.usageList;
             final int secondLen = secondUsageList.size();
 
             if ( secondUsage.usageCount != secondLen || secondLen > 2 ) {
                 return false;
             }
 
-            final InputRefUsage<SqlOperator, RexNode> firstUsage = firstUsageMap.get( entry.getKey() );
+            final InputRefUsage<Operator, RexNode> firstUsage = firstUsageMap.get( entry.getKey() );
 
             if ( firstUsage == null
                     || firstUsage.usageList.size() != firstUsage.usageCount
@@ -316,23 +323,23 @@ public class RexImplicationChecker {
                 return false;
             }
 
-            final List<Pair<SqlOperator, RexNode>> firstUsageList = firstUsage.usageList;
+            final List<Pair<Operator, RexNode>> firstUsageList = firstUsage.usageList;
             final int firstLen = firstUsageList.size();
 
-            final SqlKind fKind = firstUsageList.get( 0 ).getKey().getKind();
-            final SqlKind sKind = secondUsageList.get( 0 ).getKey().getKind();
-            final SqlKind fKind2 = (firstUsageList.size() == 2) ? firstUsageList.get( 1 ).getKey().getKind() : null;
-            final SqlKind sKind2 = (secondUsageList.size() == 2) ? secondUsageList.get( 1 ).getKey().getKind() : null;
+            final Kind fKind = firstUsageList.get( 0 ).getKey().getKind();
+            final Kind sKind = secondUsageList.get( 0 ).getKey().getKind();
+            final Kind fKind2 = (firstUsageList.size() == 2) ? firstUsageList.get( 1 ).getKey().getKind() : null;
+            final Kind sKind2 = (secondUsageList.size() == 2) ? secondUsageList.get( 1 ).getKey().getKind() : null;
 
             if ( firstLen == 2 && secondLen == 2
                     && !(isEquivalentOp( fKind, sKind ) && isEquivalentOp( fKind2, sKind2 ))
                     && !(isEquivalentOp( fKind, sKind2 ) && isEquivalentOp( fKind2, sKind )) ) {
                 return false;
             } else if ( firstLen == 1 && secondLen == 1
-                    && fKind != SqlKind.EQUALS && !isSupportedUnaryOperators( sKind )
+                    && fKind != Kind.EQUALS && !isSupportedUnaryOperators( sKind )
                     && !isEquivalentOp( fKind, sKind ) ) {
                 return false;
-            } else if ( firstLen == 1 && secondLen == 2 && fKind != SqlKind.EQUALS ) {
+            } else if ( firstLen == 1 && secondLen == 2 && fKind != Kind.EQUALS ) {
                 return false;
             } else if ( firstLen == 2 && secondLen == 1 ) {
                 // Allow only cases like
@@ -350,28 +357,25 @@ public class RexImplicationChecker {
     }
 
 
-    private boolean isSupportedUnaryOperators( SqlKind kind ) {
-        switch ( kind ) {
-            case IS_NOT_NULL:
-            case IS_NULL:
-                return true;
-            default:
-                return false;
-        }
+    private boolean isSupportedUnaryOperators( Kind kind ) {
+        return switch ( kind ) {
+            case IS_NOT_NULL, IS_NULL -> true;
+            default -> false;
+        };
     }
 
 
-    private boolean isEquivalentOp( SqlKind fKind, SqlKind sKind ) {
+    private boolean isEquivalentOp( Kind fKind, Kind sKind ) {
         switch ( sKind ) {
             case GREATER_THAN:
             case GREATER_THAN_OR_EQUAL:
-                if ( !(fKind == SqlKind.GREATER_THAN) && !(fKind == SqlKind.GREATER_THAN_OR_EQUAL) ) {
+                if ( !(fKind == Kind.GREATER_THAN) && !(fKind == Kind.GREATER_THAN_OR_EQUAL) ) {
                     return false;
                 }
                 break;
             case LESS_THAN:
             case LESS_THAN_OR_EQUAL:
-                if ( !(fKind == SqlKind.LESS_THAN) && !(fKind == SqlKind.LESS_THAN_OR_EQUAL) ) {
+                if ( !(fKind == Kind.LESS_THAN) && !(fKind == Kind.LESS_THAN_OR_EQUAL) ) {
                     return false;
                 }
                 break;
@@ -383,17 +387,17 @@ public class RexImplicationChecker {
     }
 
 
-    private boolean isOppositeOp( SqlKind fKind, SqlKind sKind ) {
+    private boolean isOppositeOp( Kind fKind, Kind sKind ) {
         switch ( sKind ) {
             case GREATER_THAN:
             case GREATER_THAN_OR_EQUAL:
-                if ( !(fKind == SqlKind.LESS_THAN) && !(fKind == SqlKind.LESS_THAN_OR_EQUAL) ) {
+                if ( !(fKind == Kind.LESS_THAN) && !(fKind == Kind.LESS_THAN_OR_EQUAL) ) {
                     return false;
                 }
                 break;
             case LESS_THAN:
             case LESS_THAN_OR_EQUAL:
-                if ( !(fKind == SqlKind.GREATER_THAN) && !(fKind == SqlKind.GREATER_THAN_OR_EQUAL) ) {
+                if ( !(fKind == Kind.GREATER_THAN) && !(fKind == Kind.GREATER_THAN_OR_EQUAL) ) {
                     return false;
                 }
                 break;
@@ -411,7 +415,7 @@ public class RexImplicationChecker {
 
     /**
      * Visitor that builds a usage map of inputs used by an expression.
-     *
+     * <p>
      * E.g: for x &gt; 10 AND y &lt; 20 AND x = 40, usage map is as follows:
      * <ul>
      * <li>key: x value: {(&gt;, 10),(=, 40), usageCount = 2}
@@ -420,7 +424,7 @@ public class RexImplicationChecker {
      */
     private static class InputUsageFinder extends RexVisitorImpl<Void> {
 
-        final Map<RexInputRef, InputRefUsage<SqlOperator, RexNode>> usageMap = new HashMap<>();
+        final Map<RexIndexRef, InputRefUsage<Operator, RexNode>> usageMap = new HashMap<>();
 
 
         InputUsageFinder() {
@@ -429,8 +433,8 @@ public class RexImplicationChecker {
 
 
         @Override
-        public Void visitInputRef( RexInputRef inputRef ) {
-            InputRefUsage<SqlOperator, RexNode> inputRefUse = getUsageMap( inputRef );
+        public Void visitIndexRef( RexIndexRef inputRef ) {
+            InputRefUsage<Operator, RexNode> inputRefUse = getUsageMap( inputRef );
             inputRefUse.usageCount++;
             return null;
         }
@@ -461,8 +465,8 @@ public class RexImplicationChecker {
             final List<RexNode> operands = call.getOperands();
             RexNode first = removeCast( operands.get( 0 ) );
 
-            if ( first.isA( SqlKind.INPUT_REF ) ) {
-                updateUsage( call.getOperator(), (RexInputRef) first, null );
+            if ( first.isA( Kind.INPUT_REF ) ) {
+                updateUsage( call.getOperator(), (RexIndexRef) first, null );
             }
         }
 
@@ -472,26 +476,25 @@ public class RexImplicationChecker {
             RexNode first = removeCast( operands.get( 0 ) );
             RexNode second = removeCast( operands.get( 1 ) );
 
-            if ( first.isA( SqlKind.INPUT_REF ) && second.isA( SqlKind.LITERAL ) ) {
-                updateUsage( call.getOperator(), (RexInputRef) first, second );
+            if ( first.isA( Kind.INPUT_REF ) && second.isA( Kind.LITERAL ) ) {
+                updateUsage( call.getOperator(), (RexIndexRef) first, second );
             }
 
-            if ( first.isA( SqlKind.LITERAL ) && second.isA( SqlKind.INPUT_REF ) ) {
-                updateUsage( reverse( call.getOperator() ), (RexInputRef) second, first );
+            if ( first.isA( Kind.LITERAL ) && second.isA( Kind.INPUT_REF ) ) {
+                updateUsage( reverse( call.getOperator() ), (RexIndexRef) second, first );
             }
         }
 
 
-        private SqlOperator reverse( SqlOperator op ) {
-            return RelOptUtil.op( op.getKind().reverse(), op );
+        private Operator reverse( Operator op ) {
+            return AlgOptUtil.op( op.getKind().reverse(), op );
         }
 
 
         private static RexNode removeCast( RexNode inputRef ) {
-            if ( inputRef instanceof RexCall ) {
-                final RexCall castedRef = (RexCall) inputRef;
-                final SqlOperator operator = castedRef.getOperator();
-                if ( operator instanceof SqlCastFunction ) {
+            if ( inputRef instanceof RexCall castedRef ) {
+                final Operator operator = castedRef.getOperator();
+                if ( operator.getFunctionType() == FunctionType.CAST ) {
                     inputRef = castedRef.getOperands().get( 0 );
                 }
             }
@@ -499,15 +502,15 @@ public class RexImplicationChecker {
         }
 
 
-        private void updateUsage( SqlOperator op, RexInputRef inputRef, RexNode literal ) {
-            final InputRefUsage<SqlOperator, RexNode> inputRefUse = getUsageMap( inputRef );
-            Pair<SqlOperator, RexNode> use = Pair.of( op, literal );
+        private void updateUsage( Operator op, RexIndexRef inputRef, RexNode literal ) {
+            final InputRefUsage<Operator, RexNode> inputRefUse = getUsageMap( inputRef );
+            Pair<Operator, RexNode> use = Pair.of( op, literal );
             inputRefUse.usageList.add( use );
         }
 
 
-        private InputRefUsage<SqlOperator, RexNode> getUsageMap( RexInputRef rex ) {
-            InputRefUsage<SqlOperator, RexNode> inputRefUse = usageMap.get( rex );
+        private InputRefUsage<Operator, RexNode> getUsageMap( RexIndexRef rex ) {
+            InputRefUsage<Operator, RexNode> inputRefUse = usageMap.get( rex );
             if ( inputRefUse == null ) {
                 inputRefUse = new InputRefUsage<>();
                 usageMap.put( rex, inputRefUse );
@@ -515,11 +518,12 @@ public class RexImplicationChecker {
 
             return inputRefUse;
         }
+
     }
 
 
     /**
-     * Usage of a {@link RexInputRef} in an expression.
+     * Usage of a {@link RexIndexRef} in an expression.
      *
      * @param <T1> left type
      * @param <T2> right type
@@ -528,6 +532,8 @@ public class RexImplicationChecker {
 
         private final List<Pair<T1, T2>> usageList = new ArrayList<>();
         private int usageCount = 0;
+
     }
+
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,19 +35,27 @@ package org.polypheny.db.rex;
 
 
 import java.util.Objects;
-import org.polypheny.db.rel.type.RelDataType;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Value;
+import lombok.experimental.NonFinal;
+import org.polypheny.db.algebra.type.AlgDataType;
 
 
 /**
  * A row-expression which references a field.
  */
+@EqualsAndHashCode(callSuper = false)
+@Value
+@NonFinal
 public abstract class RexVariable extends RexNode {
 
-    protected final String name;
-    protected final RelDataType type;
+    @Getter
+    public String name;
+    public AlgDataType type;
 
 
-    protected RexVariable( String name, RelDataType type ) {
+    protected RexVariable( String name, AlgDataType type ) {
         this.name = Objects.requireNonNull( name );
         this.digest = Objects.requireNonNull( name );
         this.type = Objects.requireNonNull( type );
@@ -55,16 +63,15 @@ public abstract class RexVariable extends RexNode {
 
 
     @Override
-    public RelDataType getType() {
+    public AlgDataType getType() {
         return type;
     }
 
 
-    /**
-     * Returns the name of this variable.
-     */
-    public String getName() {
+    @Override
+    public String toString() {
         return name;
     }
+
 }
 

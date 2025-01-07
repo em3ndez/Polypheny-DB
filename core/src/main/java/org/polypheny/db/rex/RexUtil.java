@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,26 +48,28 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.StreamSupport;
 import javax.annotation.Nonnull;
 import org.apache.calcite.linq4j.function.Predicate1;
-import org.polypheny.db.plan.RelOptUtil;
-import org.polypheny.db.rel.RelCollation;
-import org.polypheny.db.rel.RelCollations;
-import org.polypheny.db.rel.RelFieldCollation;
-import org.polypheny.db.rel.core.Filter;
-import org.polypheny.db.rel.core.Join;
-import org.polypheny.db.rel.core.Project;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.rel.type.RelDataTypeFactory;
-import org.polypheny.db.rel.type.RelDataTypeFamily;
-import org.polypheny.db.rel.type.RelDataTypeField;
-import org.polypheny.db.rex.RexTableInputRef.RelTableRef;
+import org.polypheny.db.algebra.AlgCollation;
+import org.polypheny.db.algebra.AlgCollations;
+import org.polypheny.db.algebra.AlgFieldCollation;
+import org.polypheny.db.algebra.constant.Kind;
+import org.polypheny.db.algebra.core.Filter;
+import org.polypheny.db.algebra.core.Join;
+import org.polypheny.db.algebra.core.Project;
+import org.polypheny.db.algebra.fun.AggFunction;
+import org.polypheny.db.algebra.operators.OperatorName;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.algebra.type.AlgDataTypeFactory;
+import org.polypheny.db.algebra.type.AlgDataTypeFamily;
+import org.polypheny.db.algebra.type.AlgDataTypeField;
+import org.polypheny.db.languages.OperatorRegistry;
+import org.polypheny.db.nodes.Operator;
+import org.polypheny.db.nodes.OperatorImpl;
+import org.polypheny.db.plan.AlgOptUtil;
+import org.polypheny.db.rex.RexTableIndexRef.AlgTableRef;
 import org.polypheny.db.schema.Schemas;
-import org.polypheny.db.sql.SqlAggFunction;
-import org.polypheny.db.sql.SqlKind;
-import org.polypheny.db.sql.SqlOperator;
-import org.polypheny.db.sql.fun.SqlStdOperatorTable;
-import org.polypheny.db.sql.validate.SqlValidatorUtil;
 import org.polypheny.db.type.PolyType;
 import org.polypheny.db.type.PolyTypeFamily;
 import org.polypheny.db.type.PolyTypeUtil;
@@ -76,6 +78,8 @@ import org.polypheny.db.util.Litmus;
 import org.polypheny.db.util.Pair;
 import org.polypheny.db.util.Util;
 import org.polypheny.db.util.Util.FoundOne;
+import org.polypheny.db.util.ValidatorUtil;
+import org.polypheny.db.util.ValidatorUtil.Suggester;
 import org.polypheny.db.util.mapping.Mappings.TargetMapping;
 
 
@@ -116,12 +120,12 @@ public class RexUtil {
      * @param rhsRowType source row type; fields must be 1-to-1 with lhsRowType, in same order
      * @return cast expressions
      */
-    public static List<RexNode> generateCastExpressions( RexBuilder rexBuilder, RelDataType lhsRowType, RelDataType rhsRowType ) {
-        final List<RelDataTypeField> fieldList = rhsRowType.getFieldList();
+    public static List<RexNode> generateCastExpressions( RexBuilder rexBuilder, AlgDataType lhsRowType, AlgDataType rhsRowType ) {
+        final List<AlgDataTypeField> fieldList = rhsRowType.getFields();
         int n = fieldList.size();
         assert n == lhsRowType.getFieldCount() : "field count: lhs [" + lhsRowType + "] rhs [" + rhsRowType + "]";
         List<RexNode> rhsExps = new ArrayList<>();
-        for ( RelDataTypeField field : fieldList ) {
+        for ( AlgDataTypeField field : fieldList ) {
             rhsExps.add( rexBuilder.makeInputRef( field.getType(), field.getIndex() ) );
         }
         return generateCastExpressions( rexBuilder, lhsRowType, rhsExps );
@@ -136,14 +140,14 @@ public class RexUtil {
      * @param rhsExps expressions to be cast
      * @return cast expressions
      */
-    public static List<RexNode> generateCastExpressions( RexBuilder rexBuilder, RelDataType lhsRowType, List<RexNode> rhsExps ) {
-        List<RelDataTypeField> lhsFields = lhsRowType.getFieldList();
+    public static List<RexNode> generateCastExpressions( RexBuilder rexBuilder, AlgDataType lhsRowType, List<RexNode> rhsExps ) {
+        List<AlgDataTypeField> lhsFields = lhsRowType.getFields();
         List<RexNode> castExps = new ArrayList<>();
-        for ( Pair<RelDataTypeField, RexNode> pair : Pair.zip( lhsFields, rhsExps, true ) ) {
-            RelDataTypeField lhsField = pair.left;
-            RelDataType lhsType = lhsField.getType();
+        for ( Pair<AlgDataTypeField, RexNode> pair : Pair.zip( lhsFields, rhsExps, true ) ) {
+            AlgDataTypeField lhsField = pair.left;
+            AlgDataType lhsType = lhsField.getType();
             final RexNode rhsExp = pair.right;
-            RelDataType rhsType = rhsExp.getType();
+            AlgDataType rhsType = rhsExp.getType();
             if ( lhsType.equals( rhsType ) ) {
                 castExps.add( rhsExp );
             } else {
@@ -168,7 +172,7 @@ public class RexUtil {
     public static boolean isNullLiteral( RexNode node, boolean allowCast ) {
         if ( node instanceof RexLiteral ) {
             RexLiteral literal = (RexLiteral) node;
-            if ( literal.getTypeName() == PolyType.NULL ) {
+            if ( literal.getPolyType() == PolyType.NULL ) {
                 assert null == literal.getValue();
                 return true;
             } else {
@@ -178,7 +182,7 @@ public class RexUtil {
             }
         }
         if ( allowCast ) {
-            if ( node.isA( SqlKind.CAST ) ) {
+            if ( node.isA( Kind.CAST ) ) {
                 RexCall call = (RexCall) node;
                 if ( isNullLiteral( call.operands.get( 0 ), false ) ) {
                     // node is "CAST(NULL as type)"
@@ -197,7 +201,7 @@ public class RexUtil {
     public static boolean isNull( RexNode expr ) {
         switch ( expr.getKind() ) {
             case LITERAL:
-                return ((RexLiteral) expr).getValue2() == null;
+                return ((RexLiteral) expr).getValue() == null;
             case CAST:
                 return isNull( ((RexCall) expr).operands.get( 0 ) );
             default:
@@ -222,11 +226,11 @@ public class RexUtil {
      */
     public static boolean isLiteral( RexNode node, boolean allowCast ) {
         assert node != null;
-        if ( node.isA( SqlKind.LITERAL ) ) {
+        if ( node.isA( Kind.LITERAL ) ) {
             return true;
         }
         if ( allowCast ) {
-            if ( node.isA( SqlKind.CAST ) ) {
+            if ( node.isA( Kind.CAST ) ) {
                 RexCall call = (RexCall) node;
                 if ( isLiteral( call.operands.get( 0 ), false ) ) {
                     // node is "CAST(literal as type)"
@@ -263,11 +267,11 @@ public class RexUtil {
      */
     public static boolean isReferenceOrAccess( RexNode node, boolean allowCast ) {
         assert node != null;
-        if ( node instanceof RexInputRef || node instanceof RexFieldAccess ) {
+        if ( node instanceof RexIndexRef || node instanceof RexFieldAccess ) {
             return true;
         }
         if ( allowCast ) {
-            if ( node.isA( SqlKind.CAST ) ) {
+            if ( node.isA( Kind.CAST ) ) {
                 RexCall call = (RexCall) node;
                 return isReferenceOrAccess( call.operands.get( 0 ), false );
             }
@@ -279,7 +283,7 @@ public class RexUtil {
     /**
      * Returns whether an expression is a cast just for the purposes of nullability, not changing any other aspect of the type.
      */
-    public static boolean isNullabilityCast( RelDataTypeFactory typeFactory, RexNode node ) {
+    public static boolean isNullabilityCast( AlgDataTypeFactory typeFactory, RexNode node ) {
         switch ( node.getKind() ) {
             case CAST:
                 final RexCall call = (RexCall) node;
@@ -295,7 +299,7 @@ public class RexUtil {
      *
      * For example, {@code CAST(1 = 0 AS BOOLEAN)} becomes {@code 1 = 0}.
      */
-    public static RexNode removeNullabilityCast( RelDataTypeFactory typeFactory, RexNode node ) {
+    public static RexNode removeNullabilityCast( AlgDataTypeFactory typeFactory, RexNode node ) {
         while ( isNullabilityCast( typeFactory, node ) ) {
             node = ((RexCall) node).operands.get( 0 );
         }
@@ -363,14 +367,14 @@ public class RexUtil {
 
 
     private static <C extends RexNode> void gatherConstraints( Class<C> clazz, RexNode predicate, Map<RexNode, C> map, Set<RexNode> excludeSet, RexBuilder rexBuilder ) {
-        if ( predicate.getKind() != SqlKind.EQUALS && predicate.getKind() != SqlKind.IS_NULL ) {
+        if ( predicate.getKind() != Kind.EQUALS && predicate.getKind() != Kind.IS_NULL ) {
             decompose( excludeSet, predicate );
             return;
         }
         final List<RexNode> operands = ((RexCall) predicate).getOperands();
         final RexNode left;
         final RexNode right;
-        if ( predicate.getKind() == SqlKind.EQUALS ) {
+        if ( predicate.getKind() == Kind.EQUALS ) {
             left = operands.get( 0 );
             right = operands.get( 1 );
         } else { // is null
@@ -416,7 +420,8 @@ public class RexUtil {
         } else {
             if ( existedValue instanceof RexLiteral
                     && constant instanceof RexLiteral
-                    && !Objects.equals( ((RexLiteral) existedValue).getValue(),
+                    && !Objects.equals(
+                    ((RexLiteral) existedValue).getValue(),
                     ((RexLiteral) constant).getValue() ) ) {
                 // we found conflicting values, e.g. left = 10 and left = 20
                 map.remove( left );
@@ -436,7 +441,7 @@ public class RexUtil {
      * <li>{@code canAssignFrom(BIGINT, VARCHAR)} returns {@code false}</li>
      * </ul>
      */
-    private static boolean canAssignFrom( RelDataType type1, RelDataType type2 ) {
+    private static boolean canAssignFrom( AlgDataType type1, AlgDataType type2 ) {
         final PolyType name1 = type1.getPolyType();
         final PolyType name2 = type2.getPolyType();
         if ( name1.getFamily() == name2.getFamily() ) {
@@ -466,7 +471,7 @@ public class RexUtil {
 
 
         @Override
-        public Boolean visitInputRef( RexInputRef inputRef ) {
+        public Boolean visitIndexRef( RexIndexRef inputRef ) {
             return false;
         }
 
@@ -490,13 +495,25 @@ public class RexUtil {
 
 
         @Override
-        public Boolean visitTableInputRef( RexTableInputRef ref ) {
+        public Boolean visitTableInputRef( RexTableIndexRef ref ) {
             return false;
         }
 
 
         @Override
         public Boolean visitPatternFieldRef( RexPatternFieldRef fieldRef ) {
+            return false;
+        }
+
+
+        @Override
+        public Boolean visitNameRef( RexNameRef nameRef ) {
+            return false;
+        }
+
+
+        @Override
+        public Boolean visitElementRef( RexElementRef rexElementRef ) {
             return false;
         }
 
@@ -533,6 +550,7 @@ public class RexUtil {
             // "<expr>.FIELD" is constant iff "<expr>" is constant.
             return fieldAccess.getReferenceExpr().accept( this );
         }
+
     }
 
 
@@ -591,7 +609,7 @@ public class RexUtil {
      * @param operator Operator to look for
      * @param node a RexNode tree
      */
-    public static RexCall findOperatorCall( final SqlOperator operator, RexNode node ) {
+    public static RexCall findOperatorCall( final Operator operator, RexNode node ) {
         try {
             RexVisitor<Void> visitor =
                     new RexVisitorImpl<Void>( true ) {
@@ -622,7 +640,7 @@ public class RexUtil {
             RexVisitor<Void> visitor =
                     new RexVisitorImpl<Void>( true ) {
                         @Override
-                        public Void visitInputRef( RexInputRef inputRef ) {
+                        public Void visitIndexRef( RexIndexRef inputRef ) {
                             throw new Util.FoundOne( inputRef );
                         }
                     };
@@ -689,8 +707,8 @@ public class RexUtil {
                 localCheck = false;
                 break;
             case CAST:
-                RelDataType lhsType = call.getType();
-                RelDataType rhsType = call.operands.get( 0 ).getType();
+                AlgDataType lhsType = call.getType();
+                AlgDataType rhsType = call.operands.get( 0 ).getType();
                 if ( rhsType.getPolyType() == PolyType.NULL ) {
                     return false;
                 }
@@ -750,7 +768,7 @@ public class RexUtil {
 
 
     public static boolean canReinterpretOverflow( RexCall call ) {
-        assert call.isA( SqlKind.REINTERPRET ) : "call is not a reinterpret";
+        assert call.isA( Kind.REINTERPRET ) : "call is not a reinterpret";
         return call.operands.size() > 1;
     }
 
@@ -774,14 +792,14 @@ public class RexUtil {
 
     /**
      * Returns whether an array of expressions contains no forward references.
-     * That is, if expression #i contains a {@link RexInputRef} referencing field i or greater.
+     * That is, if expression #i contains a {@link RexIndexRef} referencing field i or greater.
      *
      * @param exprs Array of expressions
      * @param inputRowType Input row type
      * @param litmus What to do if an error is detected (there is a forward reference)
      * @return Whether there is a forward reference
      */
-    public static boolean containNoForwardRefs( List<RexNode> exprs, RelDataType inputRowType, Litmus litmus ) {
+    public static boolean containNoForwardRefs( List<RexNode> exprs, AlgDataType inputRowType, Litmus litmus ) {
         final ForwardRefFinder visitor = new ForwardRefFinder( inputRowType );
         for ( int i = 0; i < exprs.size(); i++ ) {
             RexNode expr = exprs.get( i );
@@ -798,7 +816,7 @@ public class RexUtil {
 
 
     /**
-     * Returns whether an array of exp contains no aggregate function calls whose arguments are not {@link RexInputRef}s.
+     * Returns whether an array of exp contains no aggregate function calls whose arguments are not {@link RexIndexRef}s.
      *
      * @param exprs Expressions
      * @param litmus Whether to assert if there is such a function call
@@ -807,7 +825,7 @@ public class RexUtil {
         for ( RexNode expr : exprs ) {
             if ( expr instanceof RexCall ) {
                 RexCall rexCall = (RexCall) expr;
-                if ( rexCall.getOperator() instanceof SqlAggFunction ) {
+                if ( rexCall.getOperator() instanceof AggFunction ) {
                     for ( RexNode operand : rexCall.operands ) {
                         if ( !(operand instanceof RexLocalRef) && !(operand instanceof RexLiteral) ) {
                             return litmus.fail( "contains non trivial agg: {}", operand );
@@ -821,7 +839,7 @@ public class RexUtil {
 
 
     /**
-     * Returns whether a list of expressions contains complex expressions, that is, a call whose arguments are not {@link RexVariable} (or a subtype such as {@link RexInputRef}) or {@link RexLiteral}.
+     * Returns whether a list of expressions contains complex expressions, that is, a call whose arguments are not {@link RexVariable} (or a subtype such as {@link RexIndexRef}) or {@link RexLiteral}.
      */
     public static boolean containComplexExprs( List<RexNode> exprs ) {
         for ( RexNode expr : exprs ) {
@@ -859,12 +877,12 @@ public class RexUtil {
      * @param node a RexNode tree
      * @return first such node found or null if it there is no such node
      */
-    public static RexTableInputRef containsTableInputRef( RexNode node ) {
+    public static RexTableIndexRef containsTableInputRef( RexNode node ) {
         try {
             RexVisitor<Void> visitor =
                     new RexVisitorImpl<Void>( true ) {
                         @Override
-                        public Void visitTableInputRef( RexTableInputRef inputRef ) {
+                        public Void visitTableInputRef( RexTableIndexRef inputRef ) {
                             throw new Util.FoundOne( inputRef );
                         }
                     };
@@ -872,7 +890,7 @@ public class RexUtil {
             return null;
         } catch ( Util.FoundOne e ) {
             Util.swallow( e, null );
-            return (RexTableInputRef) e.getNode();
+            return (RexTableIndexRef) e.getNode();
         }
     }
 
@@ -883,10 +901,10 @@ public class RexUtil {
 
 
     /**
-     * Returns whether a {@link RexNode node} is a {@link RexCall call} to a given {@link SqlOperator operator}.
+     * Returns whether a {@link RexNode node} is a {@link RexCall call} to a given {@link OperatorImpl operator}.
      */
-    public static boolean isCallTo( RexNode expr, SqlOperator op ) {
-        return (expr instanceof RexCall) && (((RexCall) expr).getOperator() == op);
+    public static boolean isCallTo( RexNode expr, Operator op ) {
+        return (expr instanceof RexCall) && (((RexCall) expr).getOperator().equals( op ));
     }
 
 
@@ -897,7 +915,7 @@ public class RexUtil {
      * @param exprs Expressions
      * @return Record type
      */
-    public static RelDataType createStructType( RelDataTypeFactory typeFactory, final List<RexNode> exprs ) {
+    public static AlgDataType createStructType( AlgDataTypeFactory typeFactory, final List<RexNode> exprs ) {
         return createStructType( typeFactory, exprs, null, null );
     }
 
@@ -914,17 +932,17 @@ public class RexUtil {
      * @param suggester Generates alternative names if {@code names} is not null and its elements are not unique
      * @return Record type
      */
-    public static RelDataType createStructType( RelDataTypeFactory typeFactory, final List<? extends RexNode> exprs, List<String> names, SqlValidatorUtil.Suggester suggester ) {
+    public static AlgDataType createStructType( AlgDataTypeFactory typeFactory, final List<? extends RexNode> exprs, List<String> names, Suggester suggester ) {
         if ( names != null && suggester != null ) {
-            names = SqlValidatorUtil.uniquify( names, suggester, typeFactory.getTypeSystem().isSchemaCaseSensitive() );
+            names = ValidatorUtil.uniquify( names, suggester, typeFactory.getTypeSystem().isSchemaCaseSensitive() );
         }
-        final RelDataTypeFactory.Builder builder = typeFactory.builder();
+        final AlgDataTypeFactory.Builder builder = typeFactory.builder();
         for ( int i = 0; i < exprs.size(); i++ ) {
             String name;
             if ( names == null || (name = names.get( i )) == null ) {
                 name = "$f" + i;
             }
-            builder.add( name, null, exprs.get( i ).getType() );
+            builder.add( null, name, null, exprs.get( i ).getType() );
         }
         return builder.build();
     }
@@ -937,17 +955,17 @@ public class RexUtil {
      * @param type Type
      * @param litmus What to do if an error is detected (there is a mismatch)
      * @return Whether every expression has the same type as the corresponding member of the struct type
-     * @see RelOptUtil#eq(String, RelDataType, String, RelDataType, org.polypheny.db.util.Litmus)
+     * @see AlgOptUtil#eq(String, AlgDataType, String, AlgDataType, org.polypheny.db.util.Litmus)
      */
-    public static boolean compatibleTypes( List<RexNode> exprs, RelDataType type, Litmus litmus ) {
-        final List<RelDataTypeField> fields = type.getFieldList();
+    public static boolean compatibleTypes( List<RexNode> exprs, AlgDataType type, Litmus litmus ) {
+        final List<AlgDataTypeField> fields = type.getFields();
         if ( exprs.size() != fields.size() ) {
             return litmus.fail( "rowtype mismatches expressions" );
         }
         for ( int i = 0; i < fields.size(); i++ ) {
-            final RelDataType exprType = exprs.get( i ).getType();
-            final RelDataType fieldType = fields.get( i ).getType();
-            if ( !RelOptUtil.eq( "type1", exprType, "type2", fieldType, litmus ) ) {
+            final AlgDataType exprType = exprs.get( i ).getType();
+            final AlgDataType fieldType = fields.get( i ).getType();
+            if ( !AlgOptUtil.eq( "type1", exprType, "type2", fieldType, litmus ) ) {
                 return litmus.fail( null );
             }
         }
@@ -965,22 +983,22 @@ public class RexUtil {
 
 
     /**
-     * Returns whether the leading edge of a given array of expressions is wholly {@link RexInputRef} objects with types corresponding to the underlying datatype.
+     * Returns whether the leading edge of a given array of expressions is wholly {@link RexIndexRef} objects with types corresponding to the underlying datatype.
      */
-    public static boolean containIdentity( List<? extends RexNode> exprs, RelDataType rowType, Litmus litmus ) {
-        final List<RelDataTypeField> fields = rowType.getFieldList();
+    public static boolean containIdentity( List<? extends RexNode> exprs, AlgDataType rowType, Litmus litmus ) {
+        final List<AlgDataTypeField> fields = rowType.getFields();
         if ( exprs.size() < fields.size() ) {
             return litmus.fail( "exprs/rowType length mismatch" );
         }
         for ( int i = 0; i < fields.size(); i++ ) {
-            if ( !(exprs.get( i ) instanceof RexInputRef) ) {
+            if ( !(exprs.get( i ) instanceof RexIndexRef) ) {
                 return litmus.fail( "expr[{}] is not a RexInputRef", i );
             }
-            RexInputRef inputRef = (RexInputRef) exprs.get( i );
+            RexIndexRef inputRef = (RexIndexRef) exprs.get( i );
             if ( inputRef.getIndex() != i ) {
                 return litmus.fail( "expr[{}] has ordinal {}", i, inputRef.getIndex() );
             }
-            if ( !RelOptUtil.eq( "type1", exprs.get( i ).getType(), "type2", fields.get( i ).getType(), litmus ) ) {
+            if ( !AlgOptUtil.eq( "type1", exprs.get( i ).getType(), "type2", fields.get( i ).getType(), litmus ) ) {
                 return litmus.fail( null );
             }
         }
@@ -991,7 +1009,7 @@ public class RexUtil {
     /**
      * Returns whether a list of expressions projects the incoming fields.
      */
-    public static boolean isIdentity( List<? extends RexNode> exps, RelDataType inputRowType ) {
+    public static boolean isIdentity( List<? extends RexNode> exps, AlgDataType inputRowType ) {
         return inputRowType.getFieldCount() == exps.size() && containIdentity( exps, inputRowType, Litmus.IGNORE );
     }
 
@@ -1027,7 +1045,7 @@ public class RexUtil {
                 if ( containsFalse( list ) ) {
                     return rexBuilder.makeLiteral( false );
                 }
-                return rexBuilder.makeCall( SqlStdOperatorTable.AND, list );
+                return rexBuilder.makeCall( OperatorRegistry.get( OperatorName.AND ), list );
         }
     }
 
@@ -1099,7 +1117,7 @@ public class RexUtil {
                 if ( containsTrue( list ) ) {
                     return rexBuilder.makeLiteral( true );
                 }
-                return rexBuilder.makeCall( SqlStdOperatorTable.OR, list );
+                return rexBuilder.makeCall( OperatorRegistry.get( OperatorName.OR ), list );
         }
     }
 
@@ -1143,12 +1161,12 @@ public class RexUtil {
      * @param collationList Collation list
      * @return collation list with mapping applied to each field
      */
-    public static List<RelCollation> apply( TargetMapping mapping, List<RelCollation> collationList ) {
-        final List<RelCollation> newCollationList = new ArrayList<>();
-        for ( RelCollation collation : collationList ) {
-            final List<RelFieldCollation> newFieldCollationList = new ArrayList<>();
-            for ( RelFieldCollation fieldCollation : collation.getFieldCollations() ) {
-                final RelFieldCollation newFieldCollation = apply( mapping, fieldCollation );
+    public static List<AlgCollation> apply( TargetMapping mapping, List<AlgCollation> collationList ) {
+        final List<AlgCollation> newCollationList = new ArrayList<>();
+        for ( AlgCollation collation : collationList ) {
+            final List<AlgFieldCollation> newFieldCollationList = new ArrayList<>();
+            for ( AlgFieldCollation fieldCollation : collation.getFieldCollations() ) {
+                final AlgFieldCollation newFieldCollation = apply( mapping, fieldCollation );
                 if ( newFieldCollation == null ) {
                     // This field is not mapped. Stop here. The leading edge of the collation is still valid (although it's useless if it's empty).
                     break;
@@ -1157,7 +1175,7 @@ public class RexUtil {
             }
             // Truncation to collations to their leading edge creates empty and duplicate collations. Ignore these.
             if ( !newFieldCollationList.isEmpty() ) {
-                final RelCollation newCollation = RelCollations.of( newFieldCollationList );
+                final AlgCollation newCollation = AlgCollations.of( newFieldCollationList );
                 if ( !newCollationList.contains( newCollation ) ) {
                     newCollationList.add( newCollation );
                 }
@@ -1178,11 +1196,11 @@ public class RexUtil {
      * @param collation Collation
      * @return collation with mapping applied
      */
-    public static RelCollation apply( TargetMapping mapping, RelCollation collation ) {
-        List<RelFieldCollation> fieldCollations = applyFields( mapping, collation.getFieldCollations() );
+    public static AlgCollation apply( TargetMapping mapping, AlgCollation collation ) {
+        List<AlgFieldCollation> fieldCollations = applyFields( mapping, collation.getFieldCollations() );
         return fieldCollations.equals( collation.getFieldCollations() )
                 ? collation
-                : RelCollations.of( fieldCollations );
+                : AlgCollations.of( fieldCollations );
     }
 
 
@@ -1195,7 +1213,7 @@ public class RexUtil {
      * @param fieldCollation Field collation
      * @return collation with mapping applied
      */
-    public static RelFieldCollation apply( TargetMapping mapping, RelFieldCollation fieldCollation ) {
+    public static AlgFieldCollation apply( TargetMapping mapping, AlgFieldCollation fieldCollation ) {
         final int target = mapping.getTargetOpt( fieldCollation.getFieldIndex() );
         if ( target < 0 ) {
             return null;
@@ -1211,9 +1229,9 @@ public class RexUtil {
      * @param fieldCollations Field collations
      * @return collations with mapping applied
      */
-    public static List<RelFieldCollation> applyFields( TargetMapping mapping, List<RelFieldCollation> fieldCollations ) {
-        final List<RelFieldCollation> newFieldCollations = new ArrayList<>();
-        for ( RelFieldCollation fieldCollation : fieldCollations ) {
+    public static List<AlgFieldCollation> applyFields( TargetMapping mapping, List<AlgFieldCollation> fieldCollations ) {
+        final List<AlgFieldCollation> newFieldCollations = new ArrayList<>();
+        for ( AlgFieldCollation fieldCollation : fieldCollations ) {
             newFieldCollations.add( apply( mapping, fieldCollation ) );
         }
         return newFieldCollations;
@@ -1297,7 +1315,7 @@ public class RexUtil {
     public static RexNode flatten( RexBuilder rexBuilder, RexNode node ) {
         if ( node instanceof RexCall ) {
             RexCall call = (RexCall) node;
-            final SqlOperator op = call.getOperator();
+            final Operator op = call.getOperator();
             final List<RexNode> flattenedOperands = flatten( call.getOperands(), op );
             if ( !isFlat( call.getOperands(), op ) ) {
                 return rexBuilder.makeCall( call.getType(), op, flattenedOperands );
@@ -1310,7 +1328,7 @@ public class RexUtil {
     /**
      * Converts a list of operands into a list that is flat with respect to the given operator. The operands are assumed to be flat already.
      */
-    public static List<RexNode> flatten( List<? extends RexNode> exprs, SqlOperator op ) {
+    public static List<RexNode> flatten( List<? extends RexNode> exprs, Operator op ) {
         if ( isFlat( exprs, op ) ) {
             //noinspection unchecked
             return (List) exprs;
@@ -1326,7 +1344,7 @@ public class RexUtil {
      *
      * For example, {@code isFlat([w, AND[x, y], z, AND)} returns false; {@code isFlat([w, x, y, z], AND)} returns true.
      */
-    private static boolean isFlat( List<? extends RexNode> exprs, final SqlOperator op ) {
+    private static boolean isFlat( List<? extends RexNode> exprs, final Operator op ) {
         return !isAssociative( op ) || !exists( exprs, (Predicate1<RexNode>) expr -> isCallTo( expr, op ) );
     }
 
@@ -1343,9 +1361,9 @@ public class RexUtil {
     }
 
 
-    private static void flattenRecurse( List<RexNode> list, List<? extends RexNode> exprs, SqlOperator op ) {
+    private static void flattenRecurse( List<RexNode> list, List<? extends RexNode> exprs, Operator op ) {
         for ( RexNode expr : exprs ) {
-            if ( expr instanceof RexCall && ((RexCall) expr).getOperator() == op ) {
+            if ( expr instanceof RexCall && ((RexCall) expr).getOperator().equals( op ) ) {
                 flattenRecurse( list, ((RexCall) expr).getOperands(), op );
             } else {
                 list.add( expr );
@@ -1363,12 +1381,12 @@ public class RexUtil {
      * However, it is not complete.
      */
     public static boolean isLosslessCast( RexNode node ) {
-        if ( !node.isA( SqlKind.CAST ) ) {
+        if ( !node.isA( Kind.CAST ) ) {
             return false;
         }
-        final RelDataType source = ((RexCall) node).getOperands().get( 0 ).getType();
+        final AlgDataType source = ((RexCall) node).getOperands().get( 0 ).getType();
         final PolyType sourcePolyType = source.getPolyType();
-        final RelDataType target = node.getType();
+        final AlgDataType target = node.getType();
         final PolyType targetPolyType = target.getPolyType();
         // 1) Both INT numeric types
         if ( PolyTypeFamily.INTEGER.getTypeNames().contains( sourcePolyType ) && PolyTypeFamily.INTEGER.getTypeNames().contains( targetPolyType ) ) {
@@ -1473,8 +1491,8 @@ public class RexUtil {
      * Returns whether an operator is associative. AND is associative, which means that "(x AND y) and z" is equivalent to "x AND (y AND z)".
      * We might well flatten the tree, and write "AND(x, y, z)".
      */
-    private static boolean isAssociative( SqlOperator op ) {
-        return op.getKind() == SqlKind.AND || op.getKind() == SqlKind.OR;
+    private static boolean isAssociative( Operator op ) {
+        return op.getKind() == Kind.AND || op.getKind() == Kind.OR;
     }
 
 
@@ -1505,7 +1523,7 @@ public class RexUtil {
 
 
     /**
-     * Shifts every {@link RexInputRef} in an expression by {@code offset}.
+     * Shifts every {@link RexIndexRef} in an expression by {@code offset}.
      */
     public static RexNode shift( RexNode node, final int offset ) {
         if ( offset == 0 ) {
@@ -1516,7 +1534,7 @@ public class RexUtil {
 
 
     /**
-     * Shifts every {@link RexInputRef} in an expression by {@code offset}.
+     * Shifts every {@link RexIndexRef} in an expression by {@code offset}.
      */
     public static Iterable<RexNode> shift( Iterable<RexNode> nodes, int offset ) {
         return new RexShiftShuttle( offset ).apply( nodes );
@@ -1524,19 +1542,19 @@ public class RexUtil {
 
 
     /**
-     * Shifts every {@link RexInputRef} in an expression higher than {@code start}
+     * Shifts every {@link RexIndexRef} in an expression higher than {@code start}
      * by {@code offset}.
      */
     public static RexNode shift( RexNode node, final int start, final int offset ) {
         return node.accept(
                 new RexShuttle() {
                     @Override
-                    public RexNode visitInputRef( RexInputRef input ) {
+                    public RexNode visitIndexRef( RexIndexRef input ) {
                         final int index = input.getIndex();
                         if ( index < start ) {
                             return input;
                         }
-                        return new RexInputRef( index + offset, input.getType() );
+                        return new RexIndexRef( index + offset, input.getType() );
                     }
                 } );
     }
@@ -1567,13 +1585,13 @@ public class RexUtil {
 
 
     /**
-     * Fixes up the type of all {@link RexInputRef}s in an expression to match differences in nullability.
+     * Fixes up the type of all {@link RexIndexRef}s in an expression to match differences in nullability.
      *
      * Such differences in nullability occur when expressions are moved through outer joins.
      *
      * Throws if there any greater inconsistencies of type.
      */
-    public static List<RexNode> fixUp( final RexBuilder rexBuilder, List<RexNode> nodes, final List<RelDataType> fieldTypes ) {
+    public static List<RexNode> fixUp( final RexBuilder rexBuilder, List<RexNode> nodes, final List<AlgDataType> fieldTypes ) {
         return new FixNullabilityShuttle( rexBuilder, fieldTypes ).apply( nodes );
     }
 
@@ -1581,13 +1599,13 @@ public class RexUtil {
     /**
      * Transforms a list of expressions into a list of their types.
      */
-    public static List<RelDataType> types( List<? extends RexNode> nodes ) {
+    public static List<AlgDataType> types( List<? extends RexNode> nodes ) {
         return Lists.transform( nodes, RexNode::getType );
     }
 
 
-    public static List<RelDataTypeFamily> families( List<RelDataType> types ) {
-        return Lists.transform( types, RelDataType::getFamily );
+    public static List<AlgDataTypeFamily> families( List<AlgDataType> types ) {
+        return Lists.transform( types, AlgDataType::getFamily );
     }
 
 
@@ -1622,48 +1640,48 @@ public class RexUtil {
 
 
     private static RexNode addNot( RexNode e ) {
-        return new RexCall( e.getType(), SqlStdOperatorTable.NOT, ImmutableList.of( e ) );
+        return new RexCall( e.getType(), OperatorRegistry.get( OperatorName.NOT ), ImmutableList.of( e ) );
     }
 
 
-    static SqlOperator op( SqlKind kind ) {
+    static Operator op( Kind kind ) {
         switch ( kind ) {
             case IS_FALSE:
-                return SqlStdOperatorTable.IS_FALSE;
+                return OperatorRegistry.get( OperatorName.IS_FALSE );
             case IS_TRUE:
-                return SqlStdOperatorTable.IS_TRUE;
+                return OperatorRegistry.get( OperatorName.IS_TRUE );
             case IS_UNKNOWN:
-                return SqlStdOperatorTable.IS_UNKNOWN;
+                return OperatorRegistry.get( OperatorName.IS_UNKNOWN );
             case IS_NULL:
-                return SqlStdOperatorTable.IS_NULL;
+                return OperatorRegistry.get( OperatorName.IS_NULL );
             case IS_NOT_FALSE:
-                return SqlStdOperatorTable.IS_NOT_FALSE;
+                return OperatorRegistry.get( OperatorName.IS_NOT_FALSE );
             case IS_NOT_TRUE:
-                return SqlStdOperatorTable.IS_NOT_TRUE;
+                return OperatorRegistry.get( OperatorName.IS_NOT_TRUE );
             case IS_NOT_NULL:
-                return SqlStdOperatorTable.IS_NOT_NULL;
+                return OperatorRegistry.get( OperatorName.IS_NOT_NULL );
             case IS_DISTINCT_FROM:
-                return SqlStdOperatorTable.IS_DISTINCT_FROM;
+                return OperatorRegistry.get( OperatorName.IS_DISTINCT_FROM );
             case IS_NOT_DISTINCT_FROM:
-                return SqlStdOperatorTable.IS_NOT_DISTINCT_FROM;
+                return OperatorRegistry.get( OperatorName.IS_NOT_DISTINCT_FROM );
             case EQUALS:
-                return SqlStdOperatorTable.EQUALS;
+                return OperatorRegistry.get( OperatorName.EQUALS );
             case NOT_EQUALS:
-                return SqlStdOperatorTable.NOT_EQUALS;
+                return OperatorRegistry.get( OperatorName.NOT_EQUALS );
             case LESS_THAN:
-                return SqlStdOperatorTable.LESS_THAN;
+                return OperatorRegistry.get( OperatorName.LESS_THAN );
             case GREATER_THAN:
-                return SqlStdOperatorTable.GREATER_THAN;
+                return OperatorRegistry.get( OperatorName.GREATER_THAN );
             case LESS_THAN_OR_EQUAL:
-                return SqlStdOperatorTable.LESS_THAN_OR_EQUAL;
+                return OperatorRegistry.get( OperatorName.LESS_THAN_OR_EQUAL );
             case GREATER_THAN_OR_EQUAL:
-                return SqlStdOperatorTable.GREATER_THAN_OR_EQUAL;
+                return OperatorRegistry.get( OperatorName.GREATER_THAN_OR_EQUAL );
             case AND:
-                return SqlStdOperatorTable.AND;
+                return OperatorRegistry.get( OperatorName.AND );
             case OR:
-                return SqlStdOperatorTable.OR;
+                return OperatorRegistry.get( OperatorName.OR );
             case COALESCE:
-                return SqlStdOperatorTable.COALESCE;
+                return OperatorRegistry.get( OperatorName.COALESCE );
             default:
                 throw new AssertionError( kind );
         }
@@ -1678,7 +1696,7 @@ public class RexUtil {
             case GREATER_THAN:
             case LESS_THAN_OR_EQUAL:
             case GREATER_THAN_OR_EQUAL:
-                final SqlOperator op = op( call.getKind().negateNullSafe() );
+                final Operator op = op( call.getKind().negateNullSafe() );
                 return rexBuilder.makeCall( op, call.getOperands() );
         }
         return null;
@@ -1693,7 +1711,7 @@ public class RexUtil {
             case GREATER_THAN:
             case LESS_THAN_OR_EQUAL:
             case GREATER_THAN_OR_EQUAL:
-                final SqlOperator op = op( call.getKind().reverse() );
+                final Operator op = op( call.getKind().reverse() );
                 return rexBuilder.makeCall( op, Lists.reverse( call.getOperands() ) );
         }
         return null;
@@ -1725,7 +1743,8 @@ public class RexUtil {
             case EQUALS:
                 final RexCall call = (RexCall) e;
                 if ( call.getOperands().get( 1 ) instanceof RexLiteral ) {
-                    notTerms = Util.filter( notTerms,
+                    notTerms = Util.filter(
+                            notTerms,
                             e2 -> {
                                 switch ( e2.getKind() ) {
                                     case EQUALS:
@@ -1740,7 +1759,7 @@ public class RexUtil {
                             } );
                 }
         }
-        return composeConjunction( rexBuilder, Iterables.concat( ImmutableList.of( e ), Iterables.transform( notTerms, e2 -> not( rexBuilder, e2 ) ) ) );
+        return composeConjunction( rexBuilder, Iterables.concat( ImmutableList.of( e ), StreamSupport.stream( notTerms.spliterator(), false ).map( e2 -> not( rexBuilder, e2 ) ).toList() ) );
     }
 
 
@@ -1752,7 +1771,7 @@ public class RexUtil {
      * A condition case (CASE WHEN p1 THEN v1 ... ELSE e END) has an odd number of arguments and even-numbered arguments are predicates, except for the last argument.
      */
     public static boolean isCasePredicate( RexCall call, int i ) {
-        assert call.getKind() == SqlKind.CASE;
+        assert call.getKind() == Kind.CASE;
         return i < call.operands.size() - 1 && (call.operands.size() - i) % 2 == 1;
     }
 
@@ -1785,9 +1804,9 @@ public class RexUtil {
                 ? rexBuilder.makeLiteral( false )
                 : input.isAlwaysFalse()
                         ? rexBuilder.makeLiteral( true )
-                        : input.getKind() == SqlKind.NOT
+                        : input.getKind() == Kind.NOT
                                 ? ((RexCall) input).operands.get( 0 )
-                                : rexBuilder.makeCall( SqlStdOperatorTable.NOT, input );
+                                : rexBuilder.makeCall( OperatorRegistry.get( OperatorName.NOT ), input );
     }
 
 
@@ -1805,38 +1824,38 @@ public class RexUtil {
 
 
     /**
-     * Given an expression, it will swap the table references contained in its {@link RexTableInputRef} using the contents in the map.
+     * Given an expression, it will swap the table references contained in its {@link RexTableIndexRef} using the contents in the map.
      */
-    public static RexNode swapTableReferences( final RexBuilder rexBuilder, final RexNode node, final Map<RelTableRef, RelTableRef> tableMapping ) {
+    public static RexNode swapTableReferences( final RexBuilder rexBuilder, final RexNode node, final Map<AlgTableRef, AlgTableRef> tableMapping ) {
         return swapTableColumnReferences( rexBuilder, node, tableMapping, null );
     }
 
 
     /**
-     * Given an expression, it will swap its column references {@link RexTableInputRef} using the contents in the map (in particular, the first element of the set in the map value).
+     * Given an expression, it will swap its column references {@link RexTableIndexRef} using the contents in the map (in particular, the first element of the set in the map value).
      */
-    public static RexNode swapColumnReferences( final RexBuilder rexBuilder, final RexNode node, final Map<RexTableInputRef, Set<RexTableInputRef>> ec ) {
+    public static RexNode swapColumnReferences( final RexBuilder rexBuilder, final RexNode node, final Map<RexTableIndexRef, Set<RexTableIndexRef>> ec ) {
         return swapTableColumnReferences( rexBuilder, node, null, ec );
     }
 
 
     /**
-     * Given an expression, it will swap the table references contained in its {@link RexTableInputRef} using the contents in the first map, and then it will swap the column references {@link RexTableInputRef}
+     * Given an expression, it will swap the table references contained in its {@link RexTableIndexRef} using the contents in the first map, and then it will swap the column references {@link RexTableIndexRef}
      * using the contents in the second map (in particular, the first element of the set in the map value).
      */
-    public static RexNode swapTableColumnReferences( final RexBuilder rexBuilder, final RexNode node, final Map<RelTableRef, RelTableRef> tableMapping, final Map<RexTableInputRef, Set<RexTableInputRef>> ec ) {
+    public static RexNode swapTableColumnReferences( final RexBuilder rexBuilder, final RexNode node, final Map<AlgTableRef, AlgTableRef> tableMapping, final Map<RexTableIndexRef, Set<RexTableIndexRef>> ec ) {
         RexShuttle visitor =
                 new RexShuttle() {
                     @Override
-                    public RexNode visitTableInputRef( RexTableInputRef inputRef ) {
+                    public RexNode visitTableInputRef( RexTableIndexRef inputRef ) {
                         if ( tableMapping != null ) {
-                            inputRef = RexTableInputRef.of(
+                            inputRef = RexTableIndexRef.of(
                                     tableMapping.get( inputRef.getTableRef() ),
                                     inputRef.getIndex(),
                                     inputRef.getType() );
                         }
                         if ( ec != null ) {
-                            Set<RexTableInputRef> s = ec.get( inputRef );
+                            Set<RexTableIndexRef> s = ec.get( inputRef );
                             if ( s != null ) {
                                 inputRef = s.iterator().next();
                             }
@@ -1849,22 +1868,22 @@ public class RexUtil {
 
 
     /**
-     * Given an expression, it will swap the column references {@link RexTableInputRef} using the contents in the first map (in particular, the first element of the set in the map value),
-     * and then it will swap the table references contained in its {@link RexTableInputRef} using the contents in the second map.
+     * Given an expression, it will swap the column references {@link RexTableIndexRef} using the contents in the first map (in particular, the first element of the set in the map value),
+     * and then it will swap the table references contained in its {@link RexTableIndexRef} using the contents in the second map.
      */
-    public static RexNode swapColumnTableReferences( final RexBuilder rexBuilder, final RexNode node, final Map<RexTableInputRef, Set<RexTableInputRef>> ec, final Map<RelTableRef, RelTableRef> tableMapping ) {
+    public static RexNode swapColumnTableReferences( final RexBuilder rexBuilder, final RexNode node, final Map<RexTableIndexRef, Set<RexTableIndexRef>> ec, final Map<AlgTableRef, AlgTableRef> tableMapping ) {
         RexShuttle visitor =
                 new RexShuttle() {
                     @Override
-                    public RexNode visitTableInputRef( RexTableInputRef inputRef ) {
+                    public RexNode visitTableInputRef( RexTableIndexRef inputRef ) {
                         if ( ec != null ) {
-                            Set<RexTableInputRef> s = ec.get( inputRef );
+                            Set<RexTableIndexRef> s = ec.get( inputRef );
                             if ( s != null ) {
                                 inputRef = s.iterator().next();
                             }
                         }
                         if ( tableMapping != null ) {
-                            inputRef = RexTableInputRef.of(
+                            inputRef = RexTableIndexRef.of(
                                     tableMapping.get( inputRef.getTableRef() ),
                                     inputRef.getIndex(),
                                     inputRef.getType() );
@@ -1882,12 +1901,12 @@ public class RexUtil {
      * @param nodes expressions
      * @return set of table references
      */
-    public static Set<RelTableRef> gatherTableReferences( final List<RexNode> nodes ) {
-        final Set<RelTableRef> occurrences = new HashSet<>();
+    public static Set<AlgTableRef> gatherTableReferences( final List<RexNode> nodes ) {
+        final Set<AlgTableRef> occurrences = new HashSet<>();
         RexVisitor<Void> visitor =
                 new RexVisitorImpl<Void>( true ) {
                     @Override
-                    public Void visitTableInputRef( RexTableInputRef ref ) {
+                    public Void visitTableInputRef( RexTableIndexRef ref ) {
                         occurrences.add( ref.getTableRef() );
                         return super.visitTableInputRef( ref );
                     }
@@ -1929,7 +1948,7 @@ public class RexUtil {
 
 
         @Override
-        public RexNode visitInputRef( RexInputRef inputRef ) {
+        public RexNode visitIndexRef( RexIndexRef inputRef ) {
             return register( inputRef );
         }
 
@@ -1997,29 +2016,31 @@ public class RexUtil {
             SubExprExistsException( RexNode expr ) {
                 Util.discard( expr );
             }
+
         }
+
     }
 
 
     /**
-     * Walks over an expression and throws an exception if it finds an {@link RexInputRef} with an ordinal beyond the number of fields in the
+     * Walks over an expression and throws an exception if it finds an {@link RexIndexRef} with an ordinal beyond the number of fields in the
      * input row type, or a {@link RexLocalRef} with ordinal greater than that set using {@link #setLimit(int)}.
      */
     private static class ForwardRefFinder extends RexVisitorImpl<Void> {
 
         private int limit = -1;
-        private final RelDataType inputRowType;
+        private final AlgDataType inputRowType;
 
 
-        ForwardRefFinder( RelDataType inputRowType ) {
+        ForwardRefFinder( AlgDataType inputRowType ) {
             super( true );
             this.inputRowType = inputRowType;
         }
 
 
         @Override
-        public Void visitInputRef( RexInputRef inputRef ) {
-            super.visitInputRef( inputRef );
+        public Void visitIndexRef( RexIndexRef inputRef ) {
+            super.visitIndexRef( inputRef );
             if ( inputRef.getIndex() >= inputRowType.getFieldCount() ) {
                 throw new IllegalForwardRefException();
             }
@@ -2049,6 +2070,7 @@ public class RexUtil {
         static class IllegalForwardRefException extends ControlFlowException {
 
         }
+
     }
 
 
@@ -2085,6 +2107,7 @@ public class RexUtil {
         public List<RexFieldAccess> getFieldAccessList() {
             return fieldAccessList;
         }
+
     }
 
 
@@ -2140,10 +2163,10 @@ public class RexUtil {
                     operands = flattenOr( ((RexCall) rex).getOperands() );
                     final RexNode head = operands.get( 0 );
                     final RexNode headCnf = toCnf2( head );
-                    final List<RexNode> headCnfs = RelOptUtil.conjunctions( headCnf );
+                    final List<RexNode> headCnfs = AlgOptUtil.conjunctions( headCnf );
                     final RexNode tail = or( Util.skip( operands ) );
                     final RexNode tailCnf = toCnf2( tail );
-                    final List<RexNode> tailCnfs = RelOptUtil.conjunctions( tailCnf );
+                    final List<RexNode> tailCnfs = AlgOptUtil.conjunctions( tailCnf );
                     final List<RexNode> list = new ArrayList<>();
                     for ( RexNode h : headCnfs ) {
                         for ( RexNode t : tailCnfs ) {
@@ -2191,6 +2214,7 @@ public class RexUtil {
 
             private OverflowError() {
             }
+
         }
 
 
@@ -2238,11 +2262,11 @@ public class RexUtil {
             int i = 0;
             for ( RexNode node : nodes ) {
                 if ( i++ == 0 ) {
-                    for ( RexNode conjunction : RelOptUtil.conjunctions( node ) ) {
+                    for ( RexNode conjunction : AlgOptUtil.conjunctions( node ) ) {
                         map.put( conjunction, conjunction );
                     }
                 } else {
-                    map.keySet().retainAll( RelOptUtil.conjunctions( node ) );
+                    map.keySet().retainAll( AlgOptUtil.conjunctions( node ) );
                 }
             }
             return map;
@@ -2251,7 +2275,7 @@ public class RexUtil {
 
         private RexNode removeFactor( Map<RexNode, RexNode> factors, RexNode node ) {
             List<RexNode> list = new ArrayList<>();
-            for ( RexNode operand : RelOptUtil.conjunctions( node ) ) {
+            for ( RexNode operand : AlgOptUtil.conjunctions( node ) ) {
                 if ( !factors.containsKey( operand ) ) {
                     list.add( operand );
                 }
@@ -2268,6 +2292,7 @@ public class RexUtil {
         private RexNode or( Iterable<? extends RexNode> nodes ) {
             return composeDisjunction( rexBuilder, nodes );
         }
+
     }
 
 
@@ -2299,10 +2324,10 @@ public class RexUtil {
                     operands = flattenAnd( ((RexCall) rex).getOperands() );
                     final RexNode head = operands.get( 0 );
                     final RexNode headDnf = toDnf( head );
-                    final List<RexNode> headDnfs = RelOptUtil.disjunctions( headDnf );
+                    final List<RexNode> headDnfs = AlgOptUtil.disjunctions( headDnf );
                     final RexNode tail = and( Util.skip( operands ) );
                     final RexNode tailDnf = toDnf( tail );
-                    final List<RexNode> tailDnfs = RelOptUtil.disjunctions( tailDnf );
+                    final List<RexNode> tailDnfs = AlgOptUtil.disjunctions( tailDnf );
                     final List<RexNode> list = new ArrayList<>();
                     for ( RexNode h : headDnfs ) {
                         for ( RexNode t : tailDnfs ) {
@@ -2357,11 +2382,12 @@ public class RexUtil {
         private RexNode or( Iterable<? extends RexNode> nodes ) {
             return composeDisjunction( rexBuilder, nodes );
         }
+
     }
 
 
     /**
-     * Shuttle that adds {@code offset} to each {@link RexInputRef} in an expression.
+     * Shuttle that adds {@code offset} to each {@link RexIndexRef} in an expression.
      */
     private static class RexShiftShuttle extends RexShuttle {
 
@@ -2374,9 +2400,10 @@ public class RexUtil {
 
 
         @Override
-        public RexNode visitInputRef( RexInputRef input ) {
-            return new RexInputRef( input.getIndex() + offset, input.getType() );
+        public RexNode visitIndexRef( RexIndexRef input ) {
+            return new RexIndexRef( input.getIndex() + offset, input.getType() );
         }
+
     }
 
 
@@ -2397,6 +2424,7 @@ public class RexUtil {
         public Void visitCorrelVariable( RexCorrelVariable var ) {
             throw Util.FoundOne.NULL;
         }
+
     }
 
 
@@ -2405,29 +2433,30 @@ public class RexUtil {
      */
     public static class FixNullabilityShuttle extends RexShuttle {
 
-        private final List<RelDataType> typeList;
+        private final List<AlgDataType> typeList;
         private final RexBuilder rexBuilder;
 
 
-        public FixNullabilityShuttle( RexBuilder rexBuilder, List<RelDataType> typeList ) {
+        public FixNullabilityShuttle( RexBuilder rexBuilder, List<AlgDataType> typeList ) {
             this.typeList = typeList;
             this.rexBuilder = rexBuilder;
         }
 
 
         @Override
-        public RexNode visitInputRef( RexInputRef ref ) {
-            final RelDataType rightType = typeList.get( ref.getIndex() );
-            final RelDataType refType = ref.getType();
+        public RexNode visitIndexRef( RexIndexRef ref ) {
+            final AlgDataType rightType = typeList.get( ref.getIndex() );
+            final AlgDataType refType = ref.getType();
             if ( refType == rightType ) {
                 return ref;
             }
-            final RelDataType refType2 = rexBuilder.getTypeFactory().createTypeWithNullability( refType, rightType.isNullable() );
+            final AlgDataType refType2 = rexBuilder.getTypeFactory().createTypeWithNullability( refType, rightType.isNullable() );
             if ( refType2 == rightType ) {
-                return new RexInputRef( ref.getIndex(), refType2 );
+                return new RexIndexRef( ref.getIndex(), refType2 );
             }
             throw new AssertionError( "mismatched type " + ref + " " + rightType );
         }
+
     }
 
 
@@ -2511,6 +2540,7 @@ public class RexUtil {
                 return (RexSubQuery) e.getNode();
             }
         }
+
     }
 
 }

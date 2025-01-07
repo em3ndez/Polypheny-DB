@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,25 +17,31 @@
 package org.polypheny.db.routing;
 
 import java.util.List;
-import org.polypheny.db.adapter.DataStore;
-import org.polypheny.db.catalog.entity.CatalogColumnPlacement;
-import org.polypheny.db.catalog.entity.CatalogTable;
-import org.polypheny.db.plan.RelOptCluster;
-import org.polypheny.db.rel.RelNode;
-import org.polypheny.db.rel.RelRoot;
+import org.polypheny.db.algebra.AlgNode;
+import org.polypheny.db.algebra.AlgRoot;
+import org.polypheny.db.algebra.core.lpg.LpgAlg;
+import org.polypheny.db.tools.RoutedAlgBuilder;
 import org.polypheny.db.transaction.Statement;
+
 
 public interface Router {
 
-    RelRoot route( RelRoot relRoot, Statement statement, ExecutionTimeMonitor executionTimeMonitor );
+    /**
+     * @param algRoot The algRoot which will be routed.
+     * @param context
+     * @return Proposes multiple routed alg nodes as a List of  relBuilders.
+     */
+    List<RoutedAlgBuilder> route( AlgRoot algRoot, RoutingContext context );
 
-    List<DataStore> createTable( long schemaId, Statement statement );
-
-    List<DataStore> addColumn( CatalogTable catalogTable, Statement statement );
-
-    void dropPlacements( List<CatalogColumnPlacement> placements );
-
-    RelNode buildJoinedTableScan( Statement statement, RelOptCluster cluster, List<CatalogColumnPlacement> placements );
-
+    /**
+     * Resets the routing caches, if some are used.
+     */
     void resetCaches();
+
+    <T extends AlgNode & LpgAlg> AlgNode routeGraph( RoutedAlgBuilder builder, T alg, Statement statement );
+
+    AlgNode routeDocument( RoutedAlgBuilder builder, AlgNode alg, Statement statement );
+
 }
+
+

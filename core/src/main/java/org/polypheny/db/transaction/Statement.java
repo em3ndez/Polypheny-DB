@@ -18,9 +18,9 @@ package org.polypheny.db.transaction;
 
 import org.polypheny.db.adapter.DataContext;
 import org.polypheny.db.information.InformationDuration;
-import org.polypheny.db.jdbc.Context;
+import org.polypheny.db.monitoring.events.StatementEvent;
+import org.polypheny.db.prepare.Context;
 import org.polypheny.db.processing.QueryProcessor;
-import org.polypheny.db.routing.Router;
 import org.polypheny.db.util.FileInputHandle;
 
 public interface Statement {
@@ -33,9 +33,15 @@ public interface Statement {
 
     Context getPrepareContext();
 
-    InformationDuration getDuration();
+    InformationDuration getProcessingDuration();
 
-    Router getRouter();
+    InformationDuration getRoutingDuration();
+
+    InformationDuration getOverviewDuration();
+
+    StatementEvent getMonitoringEvent();
+
+    void setMonitoringEvent( StatementEvent event );
 
     void close();
 

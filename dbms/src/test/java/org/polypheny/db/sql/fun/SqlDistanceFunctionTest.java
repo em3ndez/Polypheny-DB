@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,31 +22,23 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.Types;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.calcite.avatica.ColumnMetaData;
-import org.apache.calcite.avatica.ColumnMetaData.Rep;
-import org.apache.calcite.avatica.util.ArrayFactoryImpl;
-import org.apache.calcite.avatica.util.Unsafe;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
-import org.polypheny.db.AdapterTestSuite;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.polypheny.db.TestHelper;
 import org.polypheny.db.TestHelper.JdbcConnection;
-import org.polypheny.db.excluded.CassandraExcluded;
-import org.polypheny.db.excluded.FileExcluded;
 
 
 @SuppressWarnings({ "SqlDialectInspection", "SqlNoDataSourceInspection" })
 @Slf4j
-@Category({ AdapterTestSuite.class, FileExcluded.class, CassandraExcluded.class })
+@Tag("adapter")
 public class SqlDistanceFunctionTest {
 
 
-    @BeforeClass
+    @BeforeAll
     public static void start() throws SQLException {
         // Ensures that Polypheny-DB is running
         //noinspection ResultOfMethodCallIgnored
@@ -80,7 +72,7 @@ public class SqlDistanceFunctionTest {
     }
 
 
-    @AfterClass
+    @AfterAll
     public static void stop() throws SQLException {
         try ( JdbcConnection jdbcConnection = new JdbcConnection( true ) ) {
             Connection connection = jdbcConnection.getConnection();
@@ -108,17 +100,32 @@ public class SqlDistanceFunctionTest {
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2SQUARED') as dist FROM knninttest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2SQUARED') as dist FROM knninttest ORDER BY id" ),
                         expectedResult
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2SQUARED') as dist FROM knndoubletest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2SQUARED') as dist FROM knndoubletest ORDER BY id" ),
                         expectedResult
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2SQUARED') as dist FROM knnbigtest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2SQUARED') as dist FROM knnbigtest ORDER BY id" ),
+                        expectedResult
+                );
+
+                TestHelper.checkResultSet(
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2SQUARED') as dist FROM knninttest ORDER BY dist LIMIT 5" ),
+                        expectedResult
+                );
+
+                TestHelper.checkResultSet(
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2SQUARED') as dist FROM knndoubletest ORDER BY dist LIMIT 5" ),
+                        expectedResult
+                );
+
+                TestHelper.checkResultSet(
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2SQUARED') as dist FROM knnbigtest ORDER BY dist LIMIT 5" ),
                         expectedResult
                 );
             }
@@ -139,17 +146,17 @@ public class SqlDistanceFunctionTest {
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2') as dist FROM knninttest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2') as dist FROM knninttest ORDER BY id" ),
                         expectedResult
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2') as dist FROM knndoubletest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2') as dist FROM knndoubletest ORDER BY id" ),
                         expectedResult
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2') as dist FROM knnbigtest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L2') as dist FROM knnbigtest ORDER BY id" ),
                         expectedResult
                 );
             }
@@ -170,17 +177,17 @@ public class SqlDistanceFunctionTest {
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L1') as dist FROM knninttest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L1') as dist FROM knninttest ORDER BY id" ),
                         expectedResult
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L1') as dist FROM knndoubletest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L1') as dist FROM knndoubletest ORDER BY id" ),
                         expectedResult
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L1') as dist FROM knndoubletest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'L1') as dist FROM knndoubletest ORDER BY id" ),
                         expectedResult
                 );
             }
@@ -201,17 +208,17 @@ public class SqlDistanceFunctionTest {
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'CHISQUARED') as dist FROM knninttest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'CHISQUARED') as dist FROM knninttest ORDER BY id" ),
                         expectedResult
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'CHISQUARED') as dist FROM knndoubletest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'CHISQUARED') as dist FROM knndoubletest ORDER BY id" ),
                         expectedResult
                 );
 
                 TestHelper.checkResultSet(
-                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'CHISQUARED') as dist FROM knndoubletest" ),
+                        statement.executeQuery( "SELECT id, distance(myarray, ARRAY[1,1], 'CHISQUARED') as dist FROM knndoubletest ORDER BY id" ),
                         expectedResult
                 );
             }
@@ -243,12 +250,11 @@ public class SqlDistanceFunctionTest {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
-                PreparedStatement preparedStatement = connection.prepareStatement( "SELECT id, distance(myarray, cast(? as INTEGER ARRAY), cast( ? as VARCHAR)) as dist FROM knninttest" );
+                PreparedStatement preparedStatement = connection.prepareStatement( "SELECT id, distance(myarray, cast(? as INTEGER ARRAY), cast( ? as VARCHAR)) as dist FROM knninttest ORDER BY id" );
 
-                final ArrayFactoryImpl arrayFactory = new ArrayFactoryImpl( Unsafe.localCalendar().getTimeZone() );
-                preparedStatement.setArray( 1, arrayFactory.createArray(
-                        ColumnMetaData.scalar( Types.INTEGER, "INTEGER", Rep.STRING ),
-                        ImmutableList.of( 1, 1 ) ) );
+                preparedStatement.setArray( 1, connection.createArrayOf(
+                        "INTEGER",
+                        new Object[]{ 1, 1 } ) );
                 preparedStatement.setString( 2, "L2SQUARED" );
 
                 TestHelper.checkResultSet(

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,10 +39,10 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.List;
 import java.util.Objects;
-import org.polypheny.db.adapter.enumerable.AggImplementor;
-import org.polypheny.db.adapter.enumerable.RexImpTable.UserDefinedAggReflectiveImplementor;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.rel.type.RelDataTypeFactory;
+import org.polypheny.db.algebra.enumerable.AggImplementor;
+import org.polypheny.db.algebra.enumerable.RexImpTable.UserDefinedAggReflectiveImplementor;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.algebra.type.AlgDataTypeFactory;
 import org.polypheny.db.schema.AggregateFunction;
 import org.polypheny.db.schema.FunctionParameter;
 import org.polypheny.db.schema.ImplementableAggFunction;
@@ -54,7 +54,8 @@ import org.polypheny.db.util.Static;
  * Implementation of {@link AggregateFunction} via user-defined class.
  * The class should implement {@code A init()}, {@code A add(A, V)}, and {@code R result(A)} methods.
  * All the methods should be either static or instance.
- * Bonus point: when using non-static implementation, the aggregate object is reused through the calculation, thus it can have aggregation-related state.
+ * Bonus point: when using non-static implementation, the aggregate object is reused through the calculation, thus it can have
+ * aggregation-related state.
  */
 public class AggregateFunctionImpl implements AggregateFunction, ImplementableAggFunction {
 
@@ -73,7 +74,16 @@ public class AggregateFunctionImpl implements AggregateFunction, ImplementableAg
     /**
      * Private constructor; use {@link #create}.
      */
-    private AggregateFunctionImpl( Class<?> declaringClass, List<FunctionParameter> params, List<Class<?>> valueTypes, Class<?> accumulatorType, Class<?> resultType, Method initMethod, Method addMethod, Method mergeMethod, Method resultMethod ) {
+    private AggregateFunctionImpl(
+            Class<?> declaringClass,
+            List<FunctionParameter> params,
+            List<Class<?>> valueTypes,
+            Class<?> accumulatorType,
+            Class<?> resultType,
+            Method initMethod,
+            Method addMethod,
+            Method mergeMethod,
+            Method resultMethod ) {
         this.declaringClass = declaringClass;
         this.valueTypes = ImmutableList.copyOf( valueTypes );
         this.parameters = params;
@@ -129,7 +139,16 @@ public class AggregateFunctionImpl implements AggregateFunction, ImplementableAg
             // TODO: check merge args are (A, A)
             // TODO: check result args are (A)
 
-            return new AggregateFunctionImpl( clazz, params.build(), valueTypes.build(), accumulatorType, resultType, initMethod, addMethod, mergeMethod, resultMethod );
+            return new AggregateFunctionImpl(
+                    clazz,
+                    params.build(),
+                    valueTypes.build(),
+                    accumulatorType,
+                    resultType,
+                    initMethod,
+                    addMethod,
+                    mergeMethod,
+                    resultMethod );
         }
         return null;
     }
@@ -142,7 +161,7 @@ public class AggregateFunctionImpl implements AggregateFunction, ImplementableAg
 
 
     @Override
-    public RelDataType getReturnType( RelDataTypeFactory typeFactory ) {
+    public AlgDataType getReturnType( AlgDataTypeFactory typeFactory ) {
         return typeFactory.createJavaType( resultType );
     }
 
@@ -151,5 +170,6 @@ public class AggregateFunctionImpl implements AggregateFunction, ImplementableAg
     public AggImplementor getImplementor( boolean windowContext ) {
         return new UserDefinedAggReflectiveImplementor( this );
     }
+
 }
 

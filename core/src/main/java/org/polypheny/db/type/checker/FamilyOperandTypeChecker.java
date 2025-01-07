@@ -20,25 +20,24 @@ package org.polypheny.db.type.checker;
 import static org.polypheny.db.util.Static.RESOURCE;
 
 import com.google.common.collect.ImmutableList;
-import java.io.Serializable;
 import java.util.List;
 import java.util.function.Predicate;
 import org.apache.calcite.linq4j.Ord;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.sql.SqlCallBinding;
-import org.polypheny.db.sql.SqlNode;
-import org.polypheny.db.sql.SqlOperator;
-import org.polypheny.db.sql.SqlUtil;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.nodes.CallBinding;
+import org.polypheny.db.nodes.Node;
+import org.polypheny.db.nodes.Operator;
 import org.polypheny.db.type.OperandCountRange;
 import org.polypheny.db.type.PolyOperandCountRanges;
 import org.polypheny.db.type.PolyType;
 import org.polypheny.db.type.PolyTypeFamily;
+import org.polypheny.db.util.CoreUtil;
 
 
 /**
  * Operand type-checking strategy which checks operands for inclusion in type families.
  */
-public class FamilyOperandTypeChecker implements PolySingleOperandTypeChecker, Serializable {
+public class FamilyOperandTypeChecker implements PolySingleOperandTypeChecker {
 
     protected final ImmutableList<PolyTypeFamily> families;
     protected final Predicate<Integer> optional;
@@ -60,20 +59,20 @@ public class FamilyOperandTypeChecker implements PolySingleOperandTypeChecker, S
 
 
     @Override
-    public boolean checkSingleOperandType( SqlCallBinding callBinding, SqlNode node, int iFormalOperand, boolean throwOnFailure ) {
+    public boolean checkSingleOperandType( CallBinding callBinding, Node node, int iFormalOperand, boolean throwOnFailure ) {
         PolyTypeFamily family = families.get( iFormalOperand );
         if ( family == PolyTypeFamily.ANY ) {
             // no need to check
             return true;
         }
-        if ( SqlUtil.isNullLiteral( node, false ) ) {
+        if ( CoreUtil.isNullLiteral( node, false ) ) {
             if ( throwOnFailure ) {
                 throw callBinding.getValidator().newValidationError( node, RESOURCE.nullIllegal() );
             } else {
                 return false;
             }
         }
-        RelDataType type = callBinding.getValidator().deriveType( callBinding.getScope(), node );
+        AlgDataType type = callBinding.getValidator().deriveType( callBinding.getScope(), node );
         PolyType typeName = type.getPolyType();
 
         // Pass type checking for operators if it's of type 'ANY'.
@@ -92,14 +91,14 @@ public class FamilyOperandTypeChecker implements PolySingleOperandTypeChecker, S
 
 
     @Override
-    public boolean checkOperandTypes( SqlCallBinding callBinding, boolean throwOnFailure ) {
+    public boolean checkOperandTypes( CallBinding callBinding, boolean throwOnFailure ) {
         if ( families.size() != callBinding.getOperandCount() ) {
             // assume this is an inapplicable sub-rule of a composite rule;
             // don't throw
             return false;
         }
 
-        for ( Ord<SqlNode> op : Ord.zip( callBinding.operands() ) ) {
+        for ( Ord<? extends Node> op : Ord.zip( callBinding.operands() ) ) {
             if ( !checkSingleOperandType( callBinding, op.e, op.i, throwOnFailure ) ) {
                 return false;
             }
@@ -120,8 +119,8 @@ public class FamilyOperandTypeChecker implements PolySingleOperandTypeChecker, S
 
 
     @Override
-    public String getAllowedSignatures( SqlOperator op, String opName ) {
-        return SqlUtil.getAliasedSignature( op, opName, families );
+    public String getAllowedSignatures( Operator op, String opName ) {
+        return CoreUtil.getAliasedSignature( op, opName, families );
     }
 
 

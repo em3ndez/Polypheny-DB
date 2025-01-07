@@ -1,0 +1,56 @@
+group "org.polypheny"
+
+
+dependencies {
+    compileOnly project(":core")
+    compileOnly project(":webui")
+
+    implementation group: "io.javalin", name: "javalin", version: javalin_version // Apache 2.0
+
+    // --- Test Compile ---
+    testImplementation project(path: ":core", configuration: "tests")
+}
+
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ["src/main/java"]
+        }
+        output.resourcesDir = file(project.buildDir.absolutePath + "/classes")
+    }
+}
+
+compileJava {
+    dependsOn(":webui:processResources")
+}
+
+
+delombok {
+    dependsOn(":webui:processResources")
+}
+
+
+/**
+ * JARs
+ */
+jar {
+    manifest {
+        attributes "Manifest-Version": "1.0"
+        attributes "Copyright": "The Polypheny Project (polypheny.org)"
+        attributes "Version": "$project.version"
+    }
+}
+java {
+    withJavadocJar()
+    withSourcesJar()
+}
+
+licensee {
+    allow('Apache-2.0')
+    allow('MIT')
+
+    allowDependency('javax.servlet', 'javax.servlet-api', '3.1.0') {
+        because 'Servlet-api.jar and javax.servlet-*.jar are under the CDDL license, the original source code for this can be found at http://www.eclipse.org/jetty/downloads.php'
+    }
+}

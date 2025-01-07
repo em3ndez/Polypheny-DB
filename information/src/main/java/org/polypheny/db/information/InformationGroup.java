@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,9 +17,11 @@
 package org.polypheny.db.information;
 
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import lombok.Getter;
 import org.polypheny.db.information.exception.InformationRuntimeException;
 
 
@@ -31,49 +33,59 @@ public class InformationGroup extends Refreshable {
     /**
      * Unique id for an InformationGroup.
      */
+    @Getter
+    @JsonProperty
     private final String id;
 
 
     /**
      * The id of the page this group belongs to.
      */
+    @Getter
+    @JsonProperty
     private final String pageId;
 
 
     /**
      * The name of this group
      */
+    @JsonProperty
     private String name; // title
 
 
     /**
      * The color of this group. This is used in the UI.
      */
+    @JsonProperty
     private GroupColor color;
 
 
     /**
      * Groups with lower uiOrder will be rendered first in the UI. The groups with no uiOrder (0) are rendered last.
      */
+    @JsonProperty
     private int uiOrder;
 
 
     /**
      * Is true, if the group was created implicit. If it will be created explicit, additional information (color/uiOrder) will be added.
      */
+    @Getter
+    @JsonProperty
     private boolean implicit = false;
 
 
     /**
      * A Map of Information objects that belong to this group.
      */
-    private final ConcurrentMap<String, Information> informationObjects = new ConcurrentHashMap<>();
+    @JsonProperty
+    private final Map<String, Information> informationObjects = new ConcurrentHashMap<>();
 
 
     /**
      * Constructor
      *
-     * @param id     Id of this group
+     * @param id Id of this group
      * @param pageId Id of the page this group belongs to
      */
     public InformationGroup( final String id, final String pageId, final String name ) {
@@ -129,6 +141,16 @@ public class InformationGroup extends Refreshable {
     }
 
 
+    public void removeInformation( final Information... infos ) {
+        for ( Information i : infos ) {
+            if ( !i.getGroup().equals( this.id ) ) {
+                throw new InformationRuntimeException( "Something is really wrong here" );
+            }
+            this.informationObjects.remove( i.getId(), i );
+        }
+    }
+
+
     /**
      * Groups with lower uiOrder will be rendered first in the UI. The groups with no uiOrder (0) are rendered last.
      *
@@ -137,34 +159,6 @@ public class InformationGroup extends Refreshable {
     public InformationGroup setOrder( final int order ) {
         this.uiOrder = order;
         return this;
-    }
-
-
-    /**
-     * Return the id for the group
-     *
-     * @return Id of the group
-     */
-    public String getId() {
-        return id;
-    }
-
-
-    /**
-     * Return the id of the page to which this group belongs to.
-     *
-     * @return The page id of this group
-     */
-    public String getPageId() {
-        return pageId;
-    }
-
-
-    /**
-     * Check if group was created implicitly.
-     */
-    public boolean isImplicit() {
-        return implicit;
     }
 
 
@@ -193,5 +187,6 @@ public class InformationGroup extends Refreshable {
         this.informationObjects.putAll( group.informationObjects );
         this.implicit = false;
     }
+
 
 }

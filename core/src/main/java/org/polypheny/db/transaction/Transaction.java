@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,15 +18,21 @@ package org.polypheny.db.transaction;
 
 
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
+import org.jetbrains.annotations.Nullable;
 import org.polypheny.db.adapter.Adapter;
 import org.polypheny.db.adapter.java.JavaTypeFactory;
-import org.polypheny.db.catalog.entity.CatalogSchema;
+import org.polypheny.db.catalog.entity.LogicalConstraint;
+import org.polypheny.db.catalog.entity.LogicalUser;
+import org.polypheny.db.catalog.entity.logical.LogicalNamespace;
+import org.polypheny.db.catalog.entity.logical.LogicalTable;
+import org.polypheny.db.catalog.snapshot.Snapshot;
 import org.polypheny.db.information.InformationManager;
-import org.polypheny.db.prepare.PolyphenyDbCatalogReader;
+import org.polypheny.db.languages.QueryLanguage;
 import org.polypheny.db.processing.DataMigrator;
-import org.polypheny.db.processing.SqlProcessor;
-import org.polypheny.db.schema.PolyphenyDbSchema;
+import org.polypheny.db.processing.Processor;
 
 
 public interface Transaction {
@@ -37,33 +43,44 @@ public interface Transaction {
 
     Statement createStatement();
 
+    LogicalUser getUser();
+
+    void attachCommitAction( Runnable action );
+
+    void attachCommitConstraint( Supplier<Boolean> constraintChecker, String description );
+
     void commit() throws TransactionException;
 
-    void rollback() throws TransactionException;
+    /**
+     * Rolls back the transaction
+     * Null for user initiated
+     *
+     * @param reason the reason to cancel the transaction.
+     * @throws TransactionException if the rollback was not successful.
+     */
+    void rollback( @Nullable String reason ) throws TransactionException;
 
-    void registerInvolvedAdapter( Adapter adapter );
+    void registerInvolvedAdapter( Adapter<?> adapter );
 
-    List<Adapter> getInvolvedAdapters();
+    Set<Adapter<?>> getInvolvedAdapters();
 
-    PolyphenyDbSchema getSchema();
+    Snapshot getSnapshot();
 
     boolean isActive();
 
     JavaTypeFactory getTypeFactory();
 
-    PolyphenyDbCatalogReader getCatalogReader();
-
-    SqlProcessor getSqlProcessor();
+    Processor getProcessor( QueryLanguage language );
 
     boolean isAnalyze();
+
+    void setAnalyze( boolean analyze );
 
     InformationManager getQueryAnalyzer();
 
     AtomicBoolean getCancelFlag();
 
-    CatalogSchema getDefaultSchema();
-
-    void addChangedTable( String qualifiedTableName );
+    LogicalNamespace getDefaultNamespace();
 
     String getOrigin();
 
@@ -73,11 +90,64 @@ public interface Transaction {
 
     DataMigrator getDataMigrator();
 
+    void setUseCache( boolean useCache );
+
+    boolean getUseCache();
+
+    void addUsedTable( LogicalTable table );
+
+    void removeUsedTable( LogicalTable table );
+
+    void getNewEntityConstraints( long entity );
+
+    void addNewConstraint( long entityId, LogicalConstraint constraint );
+
+    void removeNewConstraint( long entityId, LogicalConstraint constraint );
+
+    void setAcceptsOutdated( boolean acceptsOutdated );
+
+    boolean acceptsOutdated();
+
+    AccessMode getAccessMode();
+
+    void updateAccessMode( AccessMode accessCandidate );
+
+    TransactionManager getTransactionManager();
+
+    List<LogicalConstraint> getUsedConstraints( long id );
+
     /**
      * Flavor, how multimedia results should be returned from a store.
      */
     enum MultimediaFlavor {
         DEFAULT, FILE
+    }
+
+
+    /**
+     * Transaction Access mode.
+     */
+    enum AccessMode {
+
+        /**
+         * Transaction does not access anything.
+         */
+        NO_ACCESS,
+
+        /**
+         * Transaction is read only.
+         */
+        READ_ACCESS,
+
+        /**
+         * Transaction is used for write only.
+         */
+        WRITE_ACCESS,
+
+        /**
+         * Transaction is used for both read and write.
+         */
+        READWRITE_ACCESS
     }
 
 }

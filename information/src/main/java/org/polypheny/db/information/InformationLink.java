@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package org.polypheny.db.information;
 
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.UUID;
 
 
@@ -25,15 +26,18 @@ import java.util.UUID;
  */
 public class InformationLink extends Information {
 
+    @JsonProperty
     private String label;
+
+    @JsonProperty
     private String[] routerLink;
 
 
     /**
      * Constructor
      *
-     * @param group      The group this object belongs to
-     * @param label      Name of the link
+     * @param group The group this object belongs to
+     * @param label Name of the link
      * @param routerLink Link to a subpage of the UI
      */
     public InformationLink( final InformationGroup group, final String label, final String... routerLink ) {
@@ -44,8 +48,8 @@ public class InformationLink extends Information {
     /**
      * Constructor
      *
-     * @param groupId    Id of the group this object belongs to
-     * @param label      Name of the link
+     * @param groupId Id of the group this object belongs to
+     * @param label Name of the link
      * @param routerLink Link to a subpage of the UI
      */
     public InformationLink( final String groupId, final String label, final String... routerLink ) {
@@ -56,9 +60,9 @@ public class InformationLink extends Information {
     /**
      * Constructor
      *
-     * @param id         Id of this Information object
-     * @param groupId    Id of the group this object belongs to
-     * @param label      Name of the link
+     * @param id Id of this Information object
+     * @param groupId Id of the group this object belongs to
+     * @param label Name of the link
      * @param routerLink Link to a subpage of the UI
      */
     public InformationLink( final String id, final String groupId, final String label, final String... routerLink ) {
@@ -71,7 +75,7 @@ public class InformationLink extends Information {
     /**
      * Update a InformationLink object
      *
-     * @param label      The name of the link when it is displayed
+     * @param label The name of the link when it is displayed
      * @param routerLink Angular route to another subpage of the WebUI
      */
     public void updateLink( final String label, final String... routerLink ) {

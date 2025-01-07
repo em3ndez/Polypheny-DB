@@ -1,0 +1,84 @@
+group "org.polypheny"
+
+
+dependencies {
+    compileOnly project(":core")
+    compileOnly project(":plugins:sql-language")
+    compileOnly project(":plugins:jdbc-adapter-framework")
+
+    implementation group: "net.postgis", name: "postgis-jdbc", version: postgis_version
+    implementation group: "org.postgresql", name: "postgresql", version: postgresql_version  // BSD 2-clause
+
+    // --- Test Compile ---
+    testImplementation project(path: ":core", configuration: "tests")
+    testImplementation project(path: ":plugins:sql-language", configuration: "tests")
+
+}
+
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ["src/main/java"]
+        }
+        resources {
+            srcDirs = ["src/main/resources"]
+        }
+        output.resourcesDir = file(project.buildDir.absolutePath + "/classes")
+    }
+    test {
+        java {
+            srcDirs = ["src/test/java"]
+            destinationDirectory.set(file(project.buildDir.absolutePath + "/test-classes"))
+        }
+        resources {
+            srcDirs = ["src/test/resources"]
+        }
+        output.resourcesDir = file(project.buildDir.absolutePath + "/test-classes")
+    }
+}
+
+compileJava {
+    dependsOn(":core:processResources")
+    dependsOn(":plugins:sql-language:processResources")
+    dependsOn(":plugins:jdbc-adapter-framework:processResources")
+}
+
+compileTestJava {
+    dependsOn(":plugins:jdbc-adapter-framework:processResources")
+}
+
+delombok {
+    dependsOn(":plugins:sql-language:processResources")
+    dependsOn(":plugins:jdbc-adapter-framework:processResources")
+}
+
+/**
+ * JARs
+ */
+jar {
+    manifest {
+        attributes "Manifest-Version": "1.0"
+        attributes "Copyright": "The Polypheny Project (polypheny.org)"
+        attributes "Version": "$project.version"
+    }
+}
+java {
+    withJavadocJar()
+    withSourcesJar()
+}
+
+javadoc {
+    dependsOn(":plugins:jdbc-adapter-framework:processResources")
+}
+
+licensee {
+    allow('MIT')
+    allow('Apache-2.0')
+    allowDependency('org.postgresql', 'postgresql', '42.7.3') { because 'BSD 2-Clause' }
+
+    // Special handling due to lgpl, plugins are extracted before loading, which enables users to replace the library before
+    // startup and thus satisfies the requirements of LGPL.
+    allowDependency('net.postgis', 'postgis-geometry', '2024.1.0') { because 'Lesser GPL in plugins' }
+    allowDependency('net.postgis', 'postgis-jdbc', '2024.1.0') { because 'Lesser GPL in plugns' }
+}

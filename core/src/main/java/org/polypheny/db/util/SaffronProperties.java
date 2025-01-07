@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,9 +36,11 @@ package org.polypheny.db.util;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.security.AccessControlException;
 import java.util.Enumeration;
 import java.util.Properties;
+import org.polypheny.db.algebra.metadata.BuiltInMetadata.Collation;
+import org.polypheny.db.catalog.exceptions.GenericRuntimeException;
+import org.polypheny.db.nodes.validate.Validator;
 import org.polypheny.db.runtime.Resources;
 import org.polypheny.db.runtime.Resources.BooleanProp;
 import org.polypheny.db.runtime.Resources.Default;
@@ -49,7 +51,7 @@ import org.polypheny.db.runtime.Resources.StringProp;
 
 /**
  * Provides an environment for debugging information, et cetera, used by saffron.
- *
+ * <p>
  * It is a singleton, accessed via the {@link #INSTANCE} object. It is
  * populated from System properties if saffron is invoked via a <code>
  * main()</code> method, from a <code>javax.servlet.ServletContext</code> if
@@ -57,7 +59,7 @@ import org.polypheny.db.runtime.Resources.StringProp;
  * <code>"saffron.properties"</code> in the current directory, it is read too.
  *
  * <p>Every property used in saffron code must have a method in this interface.
- * The method must return a sub-class of
+ * The method must return a subclass of
  * {@link org.polypheny.db.runtime.Resources.Prop}. The javadoc
  * comment must describe the name of the property (for example,
  * "net.sf.saffron.connection.PoolSize") and the default value, if any. <em>
@@ -78,10 +80,10 @@ public interface SaffronProperties {
     /**
      * The string property "saffron.default.charset" is the name of the default
      * character set. The default is "ISO-8859-1". It is used in
-     * {@link org.polypheny.db.sql.validate.SqlValidator}.
+     * {@link Validator}.
      */
     @Resource("saffron.default.charset")
-    @Default("ISO-8859-1")
+    @Default("UTF-8")
     StringProp defaultCharset();
 
     /**
@@ -92,23 +94,23 @@ public interface SaffronProperties {
      * {@code org.polypheny.db.sql.SqlLiteral#SqlLiteral}
      */
     @Resource("saffron.default.nationalcharset")
-    @Default("ISO-8859-1")
+    @Default("UTF-8")
     StringProp defaultNationalCharset();
 
     /**
      * The string property "saffron.default.collation.name" is the name of the
      * default collation. The default is "ISO-8859-1$en_US". Used in
-     * {@link org.polypheny.db.sql.SqlCollation} and
+     * {@link Collation} and
      * {@code org.polypheny.db.sql.SqlLiteral#SqlLiteral}
      */
     @Resource("saffron.default.collation.name")
-    @Default("ISO-8859-1$en_US")
+    @Default("UTF-8$en_US")
     StringProp defaultCollation();
 
     /**
      * The string property "saffron.default.collation.strength" is the strength
      * of the default collation. The default is "primary". Used in
-     * {@link org.polypheny.db.sql.SqlCollation} and
+     * {@link Collation} and
      * {@code org.polypheny.db.sql.SqlLiteral#SqlLiteral}
      */
     @Resource("saffron.default.collation.strength")
@@ -120,7 +122,7 @@ public interface SaffronProperties {
      * maximum size of the cache of metadata handlers. A typical value is
      * the number of queries being concurrently prepared multiplied by the number
      * of types of metadata.
-     *
+     * <p>
      * If the value is less than 0, there is no limit. The default is 1,000.
      */
     @Resource("saffron.metadata.handler.cache.maximum.size")
@@ -151,14 +153,12 @@ public interface SaffronProperties {
                     properties.load( stream );
                 }
             } catch ( IOException e ) {
-                throw new RuntimeException( "while reading from saffron.properties file", e );
-            } catch ( AccessControlException e ) {
-                // we're in a sandbox
+                throw new GenericRuntimeException( "while reading from saffron.properties file", e );
             }
 
             // copy in all system properties which start with "saffron."
             Properties source = System.getProperties();
-            for ( Enumeration keys = source.keys(); keys.hasMoreElements(); ) {
+            for ( Enumeration<?> keys = source.keys(); keys.hasMoreElements(); ) {
                 String key = (String) keys.nextElement();
                 String value = source.getProperty( key );
                 if ( key.startsWith( "saffron." ) || key.startsWith( "net.sf.saffron." ) ) {
@@ -167,6 +167,8 @@ public interface SaffronProperties {
             }
             return Resources.create( properties, SaffronProperties.class );
         }
+
     }
+
 }
 
