@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,14 +36,14 @@ package org.polypheny.db.util;
 
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.polypheny.db.plan.AlgPlanner;
 import org.polypheny.db.plan.Context;
-import org.polypheny.db.plan.RelOptPlanner;
 
 
 /**
  * CancelFlag is used to post and check cancellation requests.
  *
- * Pass it to {@link RelOptPlanner} by putting it into a {@link Context}.
+ * Pass it to {@link AlgPlanner} by putting it into a {@link Context}.
  */
 public class CancelFlag {
 
@@ -59,27 +59,5 @@ public class CancelFlag {
     }
 
 
-    /**
-     * @return whether a cancellation has been requested
-     */
-    public boolean isCancelRequested() {
-        return atomicBoolean.get();
-    }
-
-
-    /**
-     * Requests a cancellation.
-     */
-    public void requestCancel() {
-        atomicBoolean.compareAndSet( false, true );
-    }
-
-
-    /**
-     * Clears any pending cancellation request.
-     */
-    public void clearCancel() {
-        atomicBoolean.compareAndSet( true, false );
-    }
 }
 

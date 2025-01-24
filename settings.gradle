@@ -1,26 +1,61 @@
+plugins {
+    id("org.gradle.toolchains.foojay-resolver") version "0.8.0"
+}
+
 rootProject.name = 'Polypheny-DB'
 
+toolchainManagement {
+    jvm {
+        javaRepositories {
+            repository("foojay") {
+                resolverClass = org.gradle.toolchains.foojay.FoojayToolchainResolver
+            }
+        }
+    }
+}
+
+
+// core modules
 include 'core'
-include 'cassandra-adapter'
-include 'csv-adapter'
-include 'druid-adapter'
-include 'elasticsearch-adapter'
-include 'html-adapter'
-include 'geode-adapter'
-include 'mongodb-adapter'
-include 'file-adapter'
-include 'jdbc-adapter'
-include 'pig-adapter'
-include 'pig-parser'
-include 'jdbc-interface'
-include 'webui'
-include 'dbms'
-include 'catalog'
 include 'config'
 include 'information'
-include 'statistic'
-include 'explore-by-example'
-include 'rest-interface'
-include 'cottontail-adapter'
+include 'monitoring'
+include 'webui'
 
 include 'dbms'
+
+include 'plugins'
+
+include 'plugins:inmemory-monitoring'
+
+// language plugins
+include 'plugins:sql-language'
+include 'plugins:mql-language'
+include 'plugins:pig-language'
+include 'plugins:cql-language'
+include 'plugins:cypher-language'
+
+
+include 'plugins:jdbc-adapter-framework'
+
+// interface plugins
+include 'plugins:rest-interface'
+include 'plugins:http-interface'
+include 'plugins:prism-interface'
+
+// adapters plugins
+include 'plugins:hsqldb-adapter'
+include 'plugins:neo4j-adapter'
+include 'plugins:cottontail-adapter'
+include 'plugins:ethereum-adapter'
+include 'plugins:csv-adapter'
+include 'plugins:mysql-adapter'
+include 'plugins:postgres-adapter'
+include 'plugins:monetdb-adapter'
+include 'plugins:mongodb-adapter'
+include 'plugins:file-adapter'
+include 'plugins:google-sheet-adapter'
+include 'plugins:excel-adapter'
+
+// other plugins
+include 'plugins:notebooks'

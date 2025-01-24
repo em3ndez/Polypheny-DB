@@ -1,0 +1,120 @@
+import org.javacc.plugin.gradle.javacc.CompileJavaccTask
+
+plugins {
+    id "org.javacc.javacc" version "$javacc_plugin_version"
+}
+
+
+group "org.polypheny"
+
+configurations {
+    javacc
+    tests {
+        extendsFrom testRuntimeOnly
+    }
+}
+
+
+dependencies {
+    compileOnly project(":core")
+    compileOnly project(":webui")
+    compileOnly project(":dbms")
+
+    javacc group: "net.java.dev.javacc", name: "javacc", version: javacc_version  // BSD 2-clause
+
+    // --- Test Compile ---
+    testImplementation project(path: ":dbms", configuration: "test")
+    testImplementation project(path: ":dbms")
+    testImplementation project(path: ":core", configuration: "tests")
+    testImplementation project(path: ":core")
+
+    // Workaround so org.polypheny.db.docker gets the right protobuf during testing
+    testImplementation group: "com.google.protobuf", name: "protobuf-java", version: protobuf_version // BSD 3-clause
+
+    testImplementation(group: "org.polypheny", name: "polypheny-jdbc-driver", version: polypheny_jdbc_driver_version) {
+        exclude(group: "com.fasterxml.jackson.core")
+    }  // Apache 2.0
+
+    testImplementation group: "com.konghq", name: "unirest-java", version: unirest_version // MIT
+}
+
+task generateParser(type: CompileJavaccTask) {
+    getConventionMapping().map("classpath", { configurations.javacc })
+    arguments = [static: "false"]
+    inputDirectory = file("src/main/codegen")
+    outputDirectory = file(project.buildDir.absolutePath + "/generated-sources/org/polypheny/db/cql/parser")
+}
+
+sourceSets {
+    main {
+        java {
+            // srcDirs = ["src/main/java", "build/generated-sources"]
+            srcDirs files("${buildDir}/generated-sources").builtBy(generateParser)
+        }
+        resources {
+            srcDirs = ["src/main/resources"]
+        }
+        output.resourcesDir = file(project.buildDir.absolutePath + "/classes")
+    }
+    test {
+        java {
+            srcDirs = ["src/test/java"]
+            destinationDirectory.set(file(project.buildDir.absolutePath + "/test-classes"))
+        }
+        resources {
+            srcDirs = ["src/test/resources"]
+        }
+        output.resourcesDir = file(project.buildDir.absolutePath + "/test-classes")
+    }
+}
+
+
+compileJava {
+    dependsOn("generateParser")
+    dependsOn(":core:processResources")
+    dependsOn(":information:processResources")
+    dependsOn(":config:processResources")
+    dependsOn(":webui:processResources")
+    dependsOn(":dbms:processResources")
+}
+
+delombok {
+    dependsOn(":core:processResources")
+    dependsOn(":webui:processResources")
+    dependsOn(":dbms:processResources")
+}
+
+test.dependsOn(":dbms:shadowJar")
+
+/**
+ * JavaDoc
+ */
+javadoc {
+    options.addBooleanOption("html5", true)
+
+    // suppress most of the warnings
+    options.addStringOption("Xdoclint:none", "-quiet")
+    // Include private fields in JavaDoc
+    options.memberLevel = JavadocMemberLevel.PRIVATE
+}
+
+
+/**
+ * JARs
+ */
+jar {
+    manifest {
+        attributes "Manifest-Version": "1.0"
+        attributes "Copyright": "The Polypheny Project (polypheny.org)"
+        attributes "Version": "$project.version"
+    }
+}
+java {
+    withJavadocJar()
+    withSourcesJar()
+}
+
+licensee {
+    allow('MIT')
+    allow('Apache-2.0')
+}

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,6 +34,8 @@ public class ConfigEnumList extends Config {
     @SerializedName("values")
     private final Set<Enum> enumValues;
     private final List<Enum> value;
+    private List<Enum> oldValue;
+    private List<Enum> defaultValue;
 
 
     public ConfigEnumList( final String key, final String description, final Class enumClass ) {
@@ -41,6 +43,7 @@ public class ConfigEnumList extends Config {
         //noinspection unchecked
         enumValues = ImmutableSet.copyOf( EnumSet.allOf( enumClass ) );
         this.value = new ArrayList<>();
+        this.defaultValue = new ArrayList<>();
         this.webUiFormType = WebUiFormType.CHECKBOXES;
     }
 
@@ -48,6 +51,44 @@ public class ConfigEnumList extends Config {
     public ConfigEnumList( final String key, final String description, final Class superClass, final List<Enum> defaultValue ) {
         this( key, description, superClass );
         setEnumList( defaultValue );
+        this.defaultValue = ImmutableList.copyOf( defaultValue );
+    }
+
+
+    @Override
+    public Object getPlainValueObject() {
+        return value;
+    }
+
+
+    @Override
+    public Object getDefaultValue() {
+        return defaultValue;
+    }
+
+
+    /**
+     * Checks if the currently set config value, is equal to the system configured default.
+     * If you want to reset it to the configured defaultValue use {@link #resetToDefault()}.
+     * To change the systems default value you can use: {@link #changeDefaultValue(Object)}.
+     *
+     * @return true if it is set to default, false if it deviates
+     */
+    @Override
+    public boolean isDefault() {
+        return defaultValue.containsAll( value ) && value.containsAll( defaultValue );
+    }
+
+
+    /**
+     * Restores the current value to the system configured default value.
+     *
+     * To obtain the system configured defaultValue use {@link #getDefaultValue()}.
+     * If you want to check if the current value deviates from default use: {@link #isDefault()}.
+     */
+    @Override
+    public void resetToDefault() {
+        setEnumList( ImmutableList.copyOf( defaultValue ) );
     }
 
 
@@ -67,8 +108,19 @@ public class ConfigEnumList extends Config {
     public boolean setEnumList( final List<Enum> value ) {
         if ( enumValues.containsAll( value ) ) {
             if ( validate( value ) ) {
+                if ( requiresRestart() ) {
+                    if ( this.oldValue == null ) {
+                        this.oldValue = new ArrayList<>();
+                        this.oldValue.addAll( this.value );
+                    }
+                }
+
                 this.value.clear();
                 this.value.addAll( value );
+
+                if ( this.oldValue != null && this.oldValue.equals( this.value ) ) {
+                    this.oldValue = null;
+                }
                 notifyConfigListeners();
                 return true;
             } else {
@@ -126,11 +178,11 @@ public class ConfigEnumList extends Config {
     @Override
     public boolean parseStringAndSetValue( String value ) {
         Gson gson = new Gson();
-        ArrayList<String> val = gson.fromJson( value, ArrayList.class );
+        List<String> val = gson.fromJson( value, List.class );
         List<Enum> toAdd = new ArrayList<>();
-        for( Enum e: enumValues ) {
-            if( val.contains( e.name() )){
-                toAdd.add(e);
+        for ( Enum e : enumValues ) {
+            if ( val.contains( e.name() ) ) {
+                toAdd.add( e );
             }
         }
         return this.setEnumList( toAdd );

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2022 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,8 +35,8 @@ package org.polypheny.db.rex;
 
 
 import java.util.Objects;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.sql.SqlKind;
+import org.polypheny.db.algebra.constant.Kind;
+import org.polypheny.db.algebra.type.AlgDataType;
 
 
 /**
@@ -50,18 +50,21 @@ public class RexDynamicParam extends RexVariable {
     /**
      * Creates a dynamic parameter.
      *
-     * @param type  inferred type of parameter
+     * @param type inferred type of parameter
      * @param index 0-based index of dynamic parameter in statement
      */
-    public RexDynamicParam( RelDataType type, long index ) {
-        super( "?" + index, type );
+    public RexDynamicParam( AlgDataType type, long index ) {
+        super( "?" + index + ":" + type.getPolyType().getName(), type );
+        // without this change, during optimization two nodes,
+        // which are parameterized can result in the same digest, this leads to errors, on set retrieval {VulcanoPlanner#mapDigestToRel}
+        // e.g. project(id File) -> $f0=?0  project(name VARCHAR(30)) -> $f0=?0
         this.index = index;
     }
 
 
     @Override
-    public SqlKind getKind() {
-        return SqlKind.DYNAMIC_PARAM;
+    public Kind getKind() {
+        return Kind.DYNAMIC_PARAM;
     }
 
 
@@ -96,5 +99,6 @@ public class RexDynamicParam extends RexVariable {
     public int hashCode() {
         return Objects.hash( digest, type, index );
     }
+
 }
 

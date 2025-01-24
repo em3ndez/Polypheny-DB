@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,13 +32,13 @@
  */
 package org.polypheny.db.type;
 
-import java.io.Serializable;
-import org.apache.calcite.avatica.util.TimeUnitRange;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.rel.type.RelDataTypeSystem;
-import org.polypheny.db.sql.SqlIntervalQualifier;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.algebra.type.AlgDataTypeSystem;
+import org.polypheny.db.nodes.IntervalQualifier;
+import org.polypheny.db.nodes.TimeUnitRange;
 
-public class PolyIntervalQualifier implements Serializable {
+
+public class PolyIntervalQualifier {
 
     public PolyIntervalQualifier( int startPrecision, TimeUnitRange timeUnitRange, int fractionalSecondPrecision ) {
         this.startPrecision = startPrecision;
@@ -52,13 +52,16 @@ public class PolyIntervalQualifier implements Serializable {
     public final int fractionalSecondPrecision;
 
 
-    public static PolyIntervalQualifier fromSqlQualifier( SqlIntervalQualifier intervalQualifier ) {
-        return new PolyIntervalQualifier( intervalQualifier.getStartPrecisionPreservingDefault(), intervalQualifier.timeUnitRange, intervalQualifier.getFractionalSecondPrecision() );
+    public static PolyIntervalQualifier fromSqlQualifier( IntervalQualifier intervalQualifier ) {
+        return new PolyIntervalQualifier(
+                intervalQualifier.getStartPrecisionPreservingDefault(),
+                intervalQualifier.getTimeUnitRange(),
+                intervalQualifier.getFractionalSecondPrecisionPreservingDefault() );
     }
 
 
     public static int combineFractionalSecondPrecisionPreservingDefault(
-            RelDataTypeSystem typeSystem,
+            AlgDataTypeSystem typeSystem,
             PolyIntervalQualifier qual1,
             PolyIntervalQualifier qual2 ) {
         final int p1 = qual1.getFractionalSecondPrecision( typeSystem );
@@ -87,7 +90,7 @@ public class PolyIntervalQualifier implements Serializable {
 
 
     public static int combineStartPrecisionPreservingDefault(
-            RelDataTypeSystem typeSystem,
+            AlgDataTypeSystem typeSystem,
             PolyIntervalQualifier qual1,
             PolyIntervalQualifier qual2 ) {
         final int start1 = qual1.getStartPrecision( typeSystem );
@@ -115,8 +118,8 @@ public class PolyIntervalQualifier implements Serializable {
     }
 
 
-    public int getFractionalSecondPrecision( RelDataTypeSystem typeSystem ) {
-        if ( fractionalSecondPrecision == RelDataType.PRECISION_NOT_SPECIFIED ) {
+    public int getFractionalSecondPrecision( AlgDataTypeSystem typeSystem ) {
+        if ( fractionalSecondPrecision == AlgDataType.PRECISION_NOT_SPECIFIED ) {
             return typeName().getDefaultScale();
         } else {
             return fractionalSecondPrecision;
@@ -126,15 +129,15 @@ public class PolyIntervalQualifier implements Serializable {
 
     public int getFractionalSecondPrecisionPreservingDefault() {
         if ( useDefaultFractionalSecondPrecision() ) {
-            return RelDataType.PRECISION_NOT_SPECIFIED;
+            return AlgDataType.PRECISION_NOT_SPECIFIED;
         } else {
             return fractionalSecondPrecision;
         }
     }
 
 
-    public int getStartPrecision( RelDataTypeSystem typeSystem ) {
-        if ( startPrecision == RelDataType.PRECISION_NOT_SPECIFIED ) {
+    public int getStartPrecision( AlgDataTypeSystem typeSystem ) {
+        if ( startPrecision == AlgDataType.PRECISION_NOT_SPECIFIED ) {
             return typeSystem.getDefaultPrecision( typeName() );
         } else {
             return startPrecision;
@@ -151,7 +154,7 @@ public class PolyIntervalQualifier implements Serializable {
      * Returns {@code true} if start precision is not specified.
      */
     public boolean useDefaultStartPrecision() {
-        return startPrecision == RelDataType.PRECISION_NOT_SPECIFIED;
+        return startPrecision == AlgDataType.PRECISION_NOT_SPECIFIED;
     }
 
 
@@ -159,54 +162,12 @@ public class PolyIntervalQualifier implements Serializable {
      * Returns {@code true} if fractional second precision is not specified.
      */
     public boolean useDefaultFractionalSecondPrecision() {
-        return fractionalSecondPrecision == RelDataType.PRECISION_NOT_SPECIFIED;
+        return fractionalSecondPrecision == AlgDataType.PRECISION_NOT_SPECIFIED;
     }
 
 
     public PolyType typeName() {
-        switch ( timeUnitRange ) {
-            case YEAR:
-            case ISOYEAR:
-            case CENTURY:
-            case DECADE:
-            case MILLENNIUM:
-                return PolyType.INTERVAL_YEAR;
-            case YEAR_TO_MONTH:
-                return PolyType.INTERVAL_YEAR_MONTH;
-            case MONTH:
-            case QUARTER:
-                return PolyType.INTERVAL_MONTH;
-            case DOW:
-            case ISODOW:
-            case DOY:
-            case DAY:
-            case WEEK:
-                return PolyType.INTERVAL_DAY;
-            case DAY_TO_HOUR:
-                return PolyType.INTERVAL_DAY_HOUR;
-            case DAY_TO_MINUTE:
-                return PolyType.INTERVAL_DAY_MINUTE;
-            case DAY_TO_SECOND:
-                return PolyType.INTERVAL_DAY_SECOND;
-            case HOUR:
-                return PolyType.INTERVAL_HOUR;
-            case HOUR_TO_MINUTE:
-                return PolyType.INTERVAL_HOUR_MINUTE;
-            case HOUR_TO_SECOND:
-                return PolyType.INTERVAL_HOUR_SECOND;
-            case MINUTE:
-                return PolyType.INTERVAL_MINUTE;
-            case MINUTE_TO_SECOND:
-                return PolyType.INTERVAL_MINUTE_SECOND;
-            case SECOND:
-            case MILLISECOND:
-            case EPOCH:
-            case MICROSECOND:
-            case NANOSECOND:
-                return PolyType.INTERVAL_SECOND;
-            default:
-                throw new AssertionError( timeUnitRange );
-        }
+        return PolyType.INTERVAL;
     }
 
 }

@@ -1,0 +1,148 @@
+import org.javacc.plugin.gradle.javacc.CompileJavaccTask
+
+plugins {
+    id "org.javacc.javacc" version "$javacc_plugin_version"
+}
+
+group "org.polypheny"
+
+
+configurations {
+    javacc
+    tests {
+        extendsFrom testRuntimeOnly
+    }
+}
+
+
+dependencies {
+    compileOnly project(":core")
+    compileOnly project(":monitoring")
+    compileOnly project(":dbms")
+    compileOnly project(":webui")
+
+    javacc group: "net.java.dev.javacc", name: "javacc", version: javacc_sql_version  // BSD 2-clause 4.1 breaks Expected
+
+
+    // --- Test Compile ---
+    testImplementation project(path: ":dbms", configuration: "test")
+    testImplementation project(path: ":dbms")
+    testImplementation project(path: ":core", configuration: "tests")
+    testImplementation project(path: ":core")
+
+    testRuntimeOnly(group: 'org.junit.jupiter', name: 'junit-jupiter-engine', version: junit_jupiter_version)
+    testImplementation group: "org.incava", name: "java-diff", version: java_diff_version  // Apache 2.0
+    testImplementation group: "com.jayway.jsonpath", name: "json-path", version: json_path_version  // Apache 2.0
+}
+
+
+/**
+ * Compile Pipeline
+ */
+task generateParser(type: CompileJavaccTask) {
+    getConventionMapping().map("classpath", { configurations.javacc })
+    inputDirectory = file("src/main/codegen")
+    outputDirectory = file(project.buildDir.absolutePath + "/generated-sources/org/polypheny/db/languages/sql/parser/impl")
+}
+
+compileJava {
+    dependsOn("generateParser")
+    dependsOn(":dbms:processResources")
+    dependsOn(":config:processResources")
+    dependsOn(":information:processResources")
+    dependsOn(":monitoring:processResources")
+    dependsOn(":core:processResources")
+}
+
+delombok {
+    dependsOn(":dbms:processResources")
+}
+
+test.dependsOn(":dbms:shadowJar")
+
+
+sourceSets {
+    main {
+        java {
+            //srcDirs = ["src/main/java","build/generated-sources"]
+            srcDirs files("${buildDir}/generated-sources").builtBy(generateParser)
+        }
+        resources {
+            srcDirs = ["src/main/resources"]
+            exclude "version/*.properties"
+        }
+        output.resourcesDir = file(project.buildDir.absolutePath + "/classes")
+    }
+    test {
+        java {
+            srcDirs = ["src/test/java"]
+            destinationDirectory.set(file(project.buildDir.absolutePath + "/test-classes"))
+        }
+        resources {
+            // We need the main resources for the tests as well.
+            srcDirs = ["src/test/resources", "src/main/resources"]
+        }
+        output.resourcesDir = file(project.buildDir.absolutePath + "/test-classes")
+    }
+}
+
+/**
+ * JavaDoc
+ */
+javadoc {
+    // suppress most of the warnings
+    options.addStringOption("Xdoclint:none", "-quiet")
+    // Include private fields in JavaDoc
+    options.memberLevel = JavadocMemberLevel.PRIVATE
+    // Use HTML 5 for JavaDoc
+    options.addBooleanOption("html5", true)
+
+    // Exclude build dir
+    exclude "fmpp/sql/javacc/**"
+}
+
+/**
+ * JARs
+ */
+jar {
+    manifest {
+        attributes "Manifest-Version": "1.0"
+        attributes "Copyright": "The Polypheny Project (polypheny.org)"
+        attributes "Version": "$project.version"
+    }
+}
+task sourcesJar(type: Jar, dependsOn: classes) {
+    archiveClassifier = "sources"
+    from sourceSets.main.allSource
+}
+task javadocJar(type: Jar, dependsOn: javadoc) {
+    archiveClassifier = "javadoc"
+    from javadoc.destinationDir
+}
+task testJar(type: Jar, dependsOn: testClasses) {
+    archiveClassifier = 'tests'
+    from sourceSets.test.output
+}
+artifacts {
+    //archives jar // regular jar containing only the compiled source
+    archives sourcesJar // jar file containing the java doc files
+    archives javadocJar // jar file containing the source files
+    tests testJar // jar file containing the test classes
+}
+
+
+// due to gradle 7.6+
+configurations {
+    testClasses {
+        extendsFrom(testImplementation)
+    }
+}
+artifacts {
+    // due to gradle 7.6+
+    testClasses testJar
+}
+
+licensee {
+    allow('Apache-2.0')
+    allow('MIT')
+}

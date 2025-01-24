@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,19 +34,19 @@
 package org.polypheny.db.rex;
 
 
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.sql.SqlKind;
+import org.polypheny.db.algebra.constant.Kind;
+import org.polypheny.db.algebra.type.AlgDataType;
 
 
 /**
- * Variable which references a field of an input relational expression
+ * Variable which references a field of an input algebra expression
  */
-public class RexPatternFieldRef extends RexInputRef {
+public class RexPatternFieldRef extends RexIndexRef {
 
     private final String alpha;
 
 
-    public RexPatternFieldRef( String alpha, int index, RelDataType type ) {
+    public RexPatternFieldRef( String alpha, int index, AlgDataType type ) {
         super( index, type );
         this.alpha = alpha;
         digest = alpha + ".$" + index;
@@ -58,12 +58,12 @@ public class RexPatternFieldRef extends RexInputRef {
     }
 
 
-    public static RexPatternFieldRef of( String alpha, int index, RelDataType type ) {
+    public static RexPatternFieldRef of( String alpha, int index, AlgDataType type ) {
         return new RexPatternFieldRef( alpha, index, type );
     }
 
 
-    public static RexPatternFieldRef of( String alpha, RexInputRef ref ) {
+    public static RexPatternFieldRef of( String alpha, RexIndexRef ref ) {
         return new RexPatternFieldRef( alpha, ref.getIndex(), ref.getType() );
     }
 
@@ -81,8 +81,9 @@ public class RexPatternFieldRef extends RexInputRef {
 
 
     @Override
-    public SqlKind getKind() {
-        return SqlKind.PATTERN_INPUT_REF;
+    public Kind getKind() {
+        return Kind.PATTERN_INPUT_REF;
     }
+
 }
 

@@ -1,0 +1,122 @@
+import org.javacc.plugin.gradle.javacc.CompileJavaccTask
+
+plugins {
+    id "org.javacc.javacc" version "$javacc_plugin_version"
+}
+
+group "org.polypheny"
+
+
+configurations {
+    javacc
+    tests {
+        extendsFrom testRuntimeOnly
+    }
+}
+
+
+dependencies {
+    // Javacc
+    javacc group: "net.java.dev.javacc", name: "javacc", version: javacc_version  // BSD 2-clause
+
+    compileOnly project(":core")
+    compileOnly project(":webui")
+
+
+    // --- Test Compile ---
+    testImplementation project(path: ":core", configuration: "tests")
+    testImplementation project(path: ":core")
+    testImplementation project(path: ":dbms", configuration: "test")
+    testImplementation project(path: ":dbms")
+
+}
+
+/**
+ * Compile Pipeline
+ */
+task generateParser(type: CompileJavaccTask) {
+    getConventionMapping().map("classpath", { configurations.javacc })
+    arguments = [static: 'false', lookahead: '2']
+    inputDirectory = file('src/main/codegen/javacc')
+    outputDirectory = file(project.buildDir.absolutePath + '/generated-sources/org/polypheny/db/piglet/parser')
+}
+
+
+sourceSets {
+    main {
+        java {
+            //srcDirs = ["src/main/java","build/generated-sources"]
+            srcDirs files("${buildDir}/generated-sources").builtBy(generateParser)
+        }
+        resources {
+            srcDirs = ["src/main/resources"]
+        }
+        output.resourcesDir = file(project.buildDir.absolutePath + "/classes")
+    }
+    test {
+        java {
+            srcDirs = ["src/test/java"]
+            destinationDirectory.set(file(project.buildDir.absolutePath + "/test-classes"))
+        }
+        resources {
+            srcDirs = ["src/test/resources"]
+        }
+        output.resourcesDir = file(project.buildDir.absolutePath + "/test-classes")
+    }
+}
+
+
+compileJava {
+    dependsOn("generateParser")
+    dependsOn(":core:processResources")
+    dependsOn(":config:processResources")
+    dependsOn(":information:processResources")
+    dependsOn(":webui:processResources")
+}
+
+delombok {
+    dependsOn(":webui:processResources")
+}
+
+test.dependsOn(":dbms:shadowJar")
+
+
+task testJar(type: Jar, dependsOn: testClasses) {
+    archiveClassifier = 'tests'
+    from sourceSets.test.output
+}
+
+// due to gradle 7.6+
+configurations {
+    testClasses {
+        extendsFrom(testImplementation)
+    }
+}
+artifacts {
+    // due to gradle 7.6+
+    testClasses testJar
+}
+
+/**
+ * JARs
+ */
+jar {
+    manifest {
+        attributes "Manifest-Version": "1.0"
+        attributes "Copyright": "The Polypheny Project (polypheny.org)"
+        attributes "Version": "$project.version"
+    }
+}
+java {
+    withJavadocJar()
+    withSourcesJar()
+}
+
+javadoc {
+    dependsOn(":webui:processResources")
+}
+
+licensee {
+    allow('MIT')
+    allow('Apache-2.0')
+}

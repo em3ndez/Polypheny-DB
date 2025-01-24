@@ -1,25 +1,39 @@
-import org.jetbrains.gradle.ext.*
+import org.jetbrains.gradle.ext.Gradle
 
 buildscript {
     repositories {
         maven {
-            url 'https://plugins.gradle.org/m2/'
+            url "https://plugins.gradle.org/m2/"
         }
     }
     dependencies {
         classpath group: "io.freefair.gradle", name: "lombok-plugin", version: lombok_version
         classpath group: "com.adarshr", name: "gradle-test-logger-plugin", version: gradle_test_logger_version
         classpath group: "org.reflections", name: "reflections", version: reflections_version
+        classpath group: "com.jaredsburrows", name: "gradle-license-plugin", version: license_report_version
     }
 }
 
 
 plugins {
-    id "org.jetbrains.gradle.plugin.idea-ext" version "1.0"
+    id "java"
+    id "org.jetbrains.gradle.plugin.idea-ext" version "1.1.7"
+    id 'nebula.lint' version "$nebula_lint_version"
+}
+
+
+test {
+    useJUnitPlatform()
 }
 
 
 allprojects {
+
+    version = versionMajor + "." + versionMinor + "." + versionMicro
+    isRelease = isRelease.toBoolean()
+    if (!isRelease) {
+        version = version + "-SNAPSHOT"
+    }
 
     buildscript {
         repositories {
@@ -36,15 +50,21 @@ allprojects {
     apply plugin: "java-library"
     apply plugin: "io.freefair.lombok"
     apply plugin: "com.adarshr.test-logger"
+    apply plugin: "com.jaredsburrows.license"
+    apply plugin: "nebula.lint"
 
     compileJava.options.encoding = "UTF-8"
     compileTestJava.options.encoding = "UTF-8"
     javadoc.options.encoding = "UTF-8"
 
-    sourceCompatibility = 1.8
-    targetCompatibility = 1.8
+    java {
+        toolchain {
+            languageVersion.set(JavaLanguageVersion.of(17))
+            vendor = JvmVendorSpec.ADOPTIUM
+        }
+    }
 
-    tasks.withType(JavaCompile) {
+    tasks.withType(JavaCompile).configureEach {
         options.encoding = "UTF-8"
     }
 
@@ -59,52 +79,38 @@ allprojects {
             url "https://dbis-nexus.dmi.unibas.ch/repository/maven2/"
         }
         maven {
-            url "https://clojars.org/repo/"
-        }
-        mavenCentral()
-        maven {
             url "https://oss.sonatype.org/content/repositories/snapshots/"
         }
     }
 
-    tasks.withType(JavaCompile) {
-        options.encoding = "UTF-8"
-    }
-
-    configurations.all {
+    configurations.configureEach {
         // check for updates every build
         resolutionStrategy.cacheChangingModulesFor 0, "seconds"
     }
 
     tasks.withType(Javadoc) {
-        if (JavaVersion.current().isJava9Compatible()) {
-            options.addBooleanOption("html5", true)
-        }
+        options.addBooleanOption("html5", true)
         // Suppress most of the warnings
         options.addStringOption("Xdoclint:none", "-quiet")
         // Include private fields in JavaDoc
         options.memberLevel = JavadocMemberLevel.PRIVATE
     }
 
-    task dockerTests(type: Test) {
-        description = 'Runs docker tests.'
-        group = 'verification'
-        useJUnit {
-            includeCategories 'org.polypheny.db.docker.DockerManagerTest'
-        }
-        shouldRunAfter(tasks.named('test'))
+    gradleLint.rules = ['all-dependency', 'unused-dependency']
+
+    gradleLint {
+        alwaysRun = false
     }
-    dockerTests.dependsOn(testClasses)
 
-    String storeName = System.getProperty("store.default") != null ? System.getProperty("store.default") : "hsqldb"
+    String storeName = System.getProperty("store.default") != null ? System.getProperty("store.default") : 'hsqldb'
 
-    task integrationTests(type: Test) {
+    tasks.register('integrationTests', Test) {
         description = 'Runs integration tests.'
         group = 'verification'
         systemProperty 'store.default', storeName
-        useJUnit {
-            includeCategories 'org.polypheny.db.AdapterTestSuite'
-            excludeCategories 'org.polypheny.db.excluded.' + storeName.capitalize() + "Excluded"
+        useJUnitPlatform {
+            includeTags("adapter")
+            excludeTags(storeName.toLowerCase() + "Excluded")
         }
         shouldRunAfter(tasks.named('test'))
     }
@@ -129,6 +135,35 @@ allprojects {
         logLevel 'lifecycle'
     }
 
+    dependencies {
+        ////// PF4J
+        compileOnly(group: 'org.pf4j', name: 'pf4j', version: pf4j_version) {
+            exclude group: "org.slf4j"
+        }
+        annotationProcessor group: 'org.pf4j', name: 'pf4j', version: pf4j_version
+
+        implementation group: "org.slf4j", name: "slf4j-api", version: slf4j_api_version  // MIT
+        implementation group: "org.apache.logging.log4j", name: "log4j-slf4j2-impl", version: log4j_slf4j_impl_version  // Apache 2.0
+
+        testCompileOnly(group: 'org.pf4j', name: 'pf4j', version: pf4j_version) {
+            exclude group: "org.slf4j"
+        }
+        testImplementation(group: 'org.junit.jupiter', name: 'junit-jupiter-engine', version: junit_jupiter_version)
+    }
+
+    test {
+        useJUnitPlatform()
+    }
+
+
+    licenseReport {
+        generateJsonReport = true
+        generateCsvReport = false
+        generateHtmlReport = false
+        generateTextReport = false
+    }
+
+
     idea {
         module {
             downloadJavadoc = true
@@ -145,19 +180,74 @@ allprojects {
 
 }
 
+tasks.register('gatherLicenseReports', Copy) {
+    // Define the destination directory for the reports
+    def destinationDir = "${rootProject.buildDir}/reports/licenses"
+
+    // Go through each subproject
+    subprojects.each { subproject ->
+        from("${subproject.buildDir}/reports/licenses") {
+            include 'licenseReport.json'
+            // Rename the report file to include the module name
+            rename { String fileName ->
+                "${subproject.name}-$fileName"
+            }
+        }
+    }
+
+    // Set the destination for the copied files
+    into destinationDir
+}
+gradle.projectsEvaluated { // Make sure the task runs after all projects are evaluated
+    gatherLicenseReports.dependsOn subprojects*.tasks*.findByName('licenseReport')
+}
+
+// plugin location
+ext.pluginsDir = rootProject.buildDir.path + '/plugins'
+
+
+build {
+    dependsOn(":plugins:build")
+}
+
+allprojects {
+    test.dependsOn(":plugins:assemblePlugins")
+}
+
+
+task printJavaVersion {
+    doLast {
+        println("Java version used for running Gradle: " + org.gradle.api.JavaVersion.current())
+        println "Current JAVA_HOME used by Gradle: " + System.getProperty("java.home")
+
+        // Retrieve and print the Java version configured in the toolchain
+        // Check if a toolchain is configured and retrieve details
+        if (project.extensions.findByType(JavaPluginExtension.class)?.toolchain != null) {
+            def toolchainService = project.extensions.getByType(JavaToolchainService.class)
+            def javaCompiler = toolchainService.compilerFor {
+                languageVersion.set(project.extensions.getByType(JavaPluginExtension.class).toolchain.languageVersion.get())
+            }
+            println "Java version used by toolchain: " + javaCompiler.get().metadata.languageVersion
+            println "Toolchain JAVA_HOME: " + javaCompiler.get().metadata.installationPath
+        } else {
+            println "No toolchain configured."
+        }
+    }
+}
+
 
 idea {
     project {
         settings {
             runConfigurations {
-                "Polypheny-DB"(Application) {
-                    mainClass = 'org.polypheny.db.PolyphenyDb'
-                    moduleName = getProject().idea.module.name + ".dbms.main"
+                "Polypheny-DB"(Gradle) {
+                    taskNames = ["assemblePlugins", "runDev"]
                 }
-                "Polypheny-DB (reset)"(Application) {
-                    mainClass = 'org.polypheny.db.PolyphenyDb'
-                    moduleName = getProject().idea.module.name + ".dbms.main"
-                    programParameters = '-resetCatalog'
+                "Polypheny-DB (reset)"(Gradle) {
+                    taskNames = ["assemblePlugins", ":dbms:runDevReset"]
+                }
+                "Polypheny-DB (production)"(Gradle) {
+                    taskNames = ["assemblePlugins", "run"]
                 }
             }
             copyright {
@@ -165,18 +255,18 @@ idea {
                 profiles {
                     ApacheLicense {
                         notice = 'Copyright 2019-$today.year The Polypheny Project\n' +
-                                '\n' +
-                                'Licensed under the Apache License, Version 2.0 (the \"License\");\n' +
-                                'you may not use this file except in compliance with the License.\n' +
-                                'You may obtain a copy of the License at\n' +
-                                '\n' +
-                                'http://www.apache.org/licenses/LICENSE-2.0\n' +
-                                '\n' +
-                                'Unless required by applicable law or agreed to in writing, software\n' +
-                                'distributed under the License is distributed on an \"AS IS\" BASIS,\n' +
-                                'WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n' +
-                                'See the License for the specific language governing permissions and\n' +
-                                'limitations under the License.'
+                            '\n' +
+                            'Licensed under the Apache License, Version 2.0 (the \"License\");\n' +
+                            'you may not use this file except in compliance with the License.\n' +
+                            'You may obtain a copy of the License at\n' +
+                            '\n' +
+                            'http://www.apache.org/licenses/LICENSE-2.0\n' +
+                            '\n' +
+                            'Unless required by applicable law or agreed to in writing, software\n' +
+                            'distributed under the License is distributed on an \"AS IS\" BASIS,\n' +
+                            'WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n' +
+                            'See the License for the specific language governing permissions and\n' +
+                            'limitations under the License.'
                         keyword = "Copyright"
                     }
                 }
@@ -184,7 +274,3 @@ idea {
         }
     }
 }
-
-
-
-

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,6 @@ import com.google.common.collect.ImmutableList;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,26 +48,28 @@ import org.apache.calcite.linq4j.tree.Expression;
 import org.apache.calcite.linq4j.tree.Expressions;
 import org.apache.calcite.linq4j.tree.ParameterExpression;
 import org.polypheny.db.adapter.DataContext;
-import org.polypheny.db.adapter.enumerable.AggAddContext;
-import org.polypheny.db.adapter.enumerable.AggImpState;
-import org.polypheny.db.adapter.enumerable.JavaRowFormat;
-import org.polypheny.db.adapter.enumerable.PhysType;
-import org.polypheny.db.adapter.enumerable.PhysTypeImpl;
-import org.polypheny.db.adapter.enumerable.RexToLixTranslator;
-import org.polypheny.db.adapter.enumerable.impl.AggAddContextImpl;
 import org.polypheny.db.adapter.java.JavaTypeFactory;
+import org.polypheny.db.algebra.constant.ConformanceEnum;
+import org.polypheny.db.algebra.core.Aggregate;
+import org.polypheny.db.algebra.core.AggregateCall;
+import org.polypheny.db.algebra.enumerable.AggAddContext;
+import org.polypheny.db.algebra.enumerable.AggImpState;
+import org.polypheny.db.algebra.enumerable.JavaTupleFormat;
+import org.polypheny.db.algebra.enumerable.PhysType;
+import org.polypheny.db.algebra.enumerable.PhysTypeImpl;
+import org.polypheny.db.algebra.enumerable.RexToLixTranslator;
+import org.polypheny.db.algebra.enumerable.impl.AggAddContextImpl;
+import org.polypheny.db.algebra.operators.OperatorName;
+import org.polypheny.db.algebra.type.AlgDataTypeFactory.Builder;
 import org.polypheny.db.interpreter.Row.RowBuilder;
-import org.polypheny.db.rel.core.Aggregate;
-import org.polypheny.db.rel.core.AggregateCall;
-import org.polypheny.db.rel.type.RelDataTypeFactory.Builder;
-import org.polypheny.db.rex.RexInputRef;
+import org.polypheny.db.rex.RexIndexRef;
 import org.polypheny.db.rex.RexNode;
 import org.polypheny.db.schema.impl.AggregateFunctionImpl;
-import org.polypheny.db.sql.fun.SqlStdOperatorTable;
-import org.polypheny.db.sql.validate.SqlConformance;
-import org.polypheny.db.sql.validate.SqlConformanceEnum;
+import org.polypheny.db.type.entity.PolyBoolean;
+import org.polypheny.db.type.entity.PolyValue;
+import org.polypheny.db.type.entity.numerical.PolyLong;
+import org.polypheny.db.util.Conformance;
 import org.polypheny.db.util.ImmutableBitSet;
-import org.polypheny.db.util.Pair;
 
 
 /**
@@ -83,24 +84,24 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
     private final DataContext dataContext;
 
 
-    public AggregateNode( Compiler compiler, Aggregate rel ) {
-        super( compiler, rel );
+    public AggregateNode( Compiler compiler, Aggregate alg ) {
+        super( compiler, alg );
         this.dataContext = compiler.getDataContext();
 
         ImmutableBitSet union = ImmutableBitSet.of();
 
-        if ( rel.getGroupSets() != null ) {
-            for ( ImmutableBitSet group : rel.getGroupSets() ) {
+        if ( alg.getGroupSets() != null ) {
+            for ( ImmutableBitSet group : alg.getGroupSets() ) {
                 union = union.union( group );
                 groups.add( new Grouping( group ) );
             }
         }
 
         this.unionGroups = union;
-        this.outputRowLength = unionGroups.cardinality() + (rel.indicator ? unionGroups.cardinality() : 0) + rel.getAggCallList().size();
+        this.outputRowLength = unionGroups.cardinality() + (alg.indicator ? unionGroups.cardinality() : 0) + alg.getAggCallList().size();
 
         ImmutableList.Builder<AccumulatorFactory> builder = ImmutableList.builder();
-        for ( AggregateCall aggregateCall : rel.getAggCallList() ) {
+        for ( AggregateCall aggregateCall : alg.getAggCallList() ) {
             builder.add( getAccumulator( aggregateCall, false ) );
         }
         accumulatorFactories = builder.build();
@@ -130,9 +131,9 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
                 return new FilterAccumulator( accumulator, call.filterArg );
             };
         }
-        if ( call.getAggregation() == SqlStdOperatorTable.COUNT ) {
+        if ( call.getAggregation().getOperatorName() == OperatorName.COUNT ) {
             return () -> new CountAccumulator( call );
-        } else if ( call.getAggregation() == SqlStdOperatorTable.SUM || call.getAggregation() == SqlStdOperatorTable.SUM0 ) {
+        } else if ( call.getAggregation().getOperatorName() == OperatorName.SUM || call.getAggregation().getOperatorName() == OperatorName.SUM0 ) {
             final Class<?> clazz;
             switch ( call.type.getPolyType() ) {
                 case DOUBLE:
@@ -148,12 +149,12 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
                     clazz = LongSum.class;
                     break;
             }
-            if ( call.getAggregation() == SqlStdOperatorTable.SUM ) {
+            if ( call.getAggregation().getOperatorName() == OperatorName.SUM ) {
                 return new UdaAccumulatorFactory( AggregateFunctionImpl.create( clazz ), call, true );
             } else {
                 return new UdaAccumulatorFactory( AggregateFunctionImpl.create( clazz ), call, false );
             }
-        } else if ( call.getAggregation() == SqlStdOperatorTable.MIN ) {
+        } else if ( call.getAggregation().getOperatorName() == OperatorName.MIN ) {
             final Class<?> clazz;
             switch ( call.getType().getPolyType() ) {
                 case INTEGER:
@@ -171,7 +172,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
                     break;
             }
             return new UdaAccumulatorFactory( AggregateFunctionImpl.create( clazz ), call, true );
-        } else if ( call.getAggregation() == SqlStdOperatorTable.MAX ) {
+        } else if ( call.getAggregation().getOperatorName() == OperatorName.MAX ) {
             final Class<?> clazz;
             switch ( call.getType().getPolyType() ) {
                 case INTEGER:
@@ -190,20 +191,20 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
             }
             return new UdaAccumulatorFactory( AggregateFunctionImpl.create( clazz ), call, true );
         } else {
-            final JavaTypeFactory typeFactory = (JavaTypeFactory) rel.getCluster().getTypeFactory();
+            final JavaTypeFactory typeFactory = (JavaTypeFactory) alg.getCluster().getTypeFactory();
             int stateOffset = 0;
             final AggImpState agg = new AggImpState( 0, call, false );
             int stateSize = agg.state.size();
 
             final BlockBuilder builder2 = new BlockBuilder();
-            final PhysType inputPhysType = PhysTypeImpl.of( typeFactory, rel.getInput().getRowType(), JavaRowFormat.ARRAY );
+            final PhysType inputPhysType = PhysTypeImpl.of( typeFactory, alg.getInput().getTupleType(), JavaTupleFormat.ARRAY );
             final Builder builder = typeFactory.builder();
             for ( Expression expression : agg.state ) {
-                builder.add( "a", null, typeFactory.createJavaType( (Class) expression.getType() ) );
+                builder.add( null, "a", null, typeFactory.createJavaType( (Class) expression.getType() ) );
             }
-            final PhysType accPhysType = PhysTypeImpl.of( typeFactory, builder.build(), JavaRowFormat.ARRAY );
-            final ParameterExpression inParameter = Expressions.parameter( inputPhysType.getJavaRowType(), "in" );
-            final ParameterExpression acc_ = Expressions.parameter( accPhysType.getJavaRowType(), "acc" );
+            final PhysType accPhysType = PhysTypeImpl.of( typeFactory, builder.build(), JavaTupleFormat.ARRAY );
+            final ParameterExpression inParameter = Expressions.parameter( inputPhysType.getJavaTupleType(), "in" );
+            final ParameterExpression acc_ = Expressions.parameter( accPhysType.getJavaTupleType(), "acc" );
 
             List<Expression> accumulator = new ArrayList<>( stateSize );
             for ( int j = 0; j < stateSize; j++ ) {
@@ -217,7 +218,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
                         public List<RexNode> rexArguments() {
                             List<RexNode> args = new ArrayList<>();
                             for ( int index : agg.call.getArgList() ) {
-                                args.add( RexInputRef.of( index, inputPhysType.getRowType() ) );
+                                args.add( RexIndexRef.of( index, inputPhysType.getTupleType() ) );
                             }
                             return args;
                         }
@@ -227,17 +228,17 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
                         public RexNode rexFilterArgument() {
                             return agg.call.filterArg < 0
                                     ? null
-                                    : RexInputRef.of( agg.call.filterArg, inputPhysType.getRowType() );
+                                    : RexIndexRef.of( agg.call.filterArg, inputPhysType.getTupleType() );
                         }
 
 
                         @Override
                         public RexToLixTranslator rowTranslator() {
-                            final SqlConformance conformance = SqlConformanceEnum.DEFAULT; // TODO: get this from implementor
+                            final Conformance conformance = ConformanceEnum.DEFAULT; // TODO: get this from implementor
                             return RexToLixTranslator.forAggregation(
                                     typeFactory,
                                     currentBlock(),
-                                    new RexToLixTranslator.InputGetterImpl( Collections.singletonList( Pair.of( (Expression) inParameter, inputPhysType ) ) ),
+                                    new RexToLixTranslator.InputGetterImpl( inParameter, inputPhysType ),
                                     conformance
                             ).setNullable( currentNullables() );
                         }
@@ -248,7 +249,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
             final ParameterExpression context_ = Expressions.parameter( Context.class, "context" );
             final ParameterExpression outputValues_ = Expressions.parameter( Object[].class, "outputValues" );
             Scalar addScalar = JaninoRexCompiler.baz( context_, outputValues_, builder2.toBlock(), dataContext );
-            return new ScalarAccumulatorDef( null, addScalar, null, rel.getInput().getRowType().getFieldCount(), stateSize, dataContext );
+            return new ScalarAccumulatorDef( null, addScalar, null, alg.getInput().getTupleType().getFieldCount(), stateSize, dataContext );
         }
     }
 
@@ -284,9 +285,10 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
 
 
         @Override
-        public Object end() {
-            return cnt;
+        public PolyValue end() {
+            return PolyLong.of( cnt );
         }
+
     }
 
 
@@ -319,16 +321,17 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
             this.accumulatorLength = accumulatorLength;
             this.rowLength = rowLength;
             this.sendContext = new Context( root );
-            this.sendContext.values = new Object[rowLength + accumulatorLength];
+            this.sendContext.values = new PolyValue[rowLength + accumulatorLength];
             this.endContext = new Context( root );
-            this.endContext.values = new Object[accumulatorLength];
+            this.endContext.values = new PolyValue[accumulatorLength];
         }
 
 
         @Override
         public Accumulator get() {
-            return new ScalarAccumulator( this, new Object[accumulatorLength] );
+            return new ScalarAccumulator( this, new PolyValue[accumulatorLength] );
         }
+
     }
 
 
@@ -338,10 +341,10 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
     private static class ScalarAccumulator implements Accumulator {
 
         final ScalarAccumulatorDef def;
-        final Object[] values;
+        final PolyValue[] values;
 
 
-        private ScalarAccumulator( ScalarAccumulatorDef def, Object[] values ) {
+        private ScalarAccumulator( ScalarAccumulatorDef def, PolyValue[] values ) {
             this.def = def;
             this.values = values;
         }
@@ -356,10 +359,11 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
 
 
         @Override
-        public Object end() {
+        public PolyValue end() {
             System.arraycopy( values, 0, def.endContext.values, 0, values.length );
             return def.endScalar.execute( def.endContext );
         }
+
     }
 
 
@@ -369,7 +373,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
     private class Grouping {
 
         private final ImmutableBitSet grouping;
-        private final Map<Row, AccumulatorList> accumulators = new HashMap<>();
+        private final Map<Row<PolyValue>, AccumulatorList> accumulators = new HashMap<>();
 
 
         private Grouping( ImmutableBitSet grouping ) {
@@ -377,14 +381,14 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         }
 
 
-        public void send( Row row ) {
+        public void send( Row<PolyValue> row ) {
             // TODO: fix the size of this row.
-            RowBuilder builder = Row.newBuilder( grouping.cardinality() );
+            RowBuilder<PolyValue> builder = Row.newBuilder( grouping.cardinality(), row.clazz );
             int j = 0;
             for ( Integer i : grouping ) {
                 builder.set( j++, row.getObject( i ) );
             }
-            Row key = builder.build();
+            Row<PolyValue> key = builder.build();
 
             if ( !accumulators.containsKey( key ) ) {
                 AccumulatorList list = new AccumulatorList();
@@ -399,17 +403,17 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
 
 
         public void end( Sink sink ) throws InterruptedException {
-            for ( Map.Entry<Row, AccumulatorList> e : accumulators.entrySet() ) {
-                final Row key = e.getKey();
+            for ( Map.Entry<Row<PolyValue>, AccumulatorList> e : accumulators.entrySet() ) {
+                final Row<PolyValue> key = e.getKey();
                 final AccumulatorList list = e.getValue();
 
-                RowBuilder rb = Row.newBuilder( outputRowLength );
+                RowBuilder<PolyValue> rb = Row.newBuilder( outputRowLength, PolyValue.class );
                 int index = 0;
                 for ( Integer groupPos : unionGroups ) {
                     if ( grouping.get( groupPos ) ) {
                         rb.set( index, key.getObject( index ) );
-                        if ( rel.indicator ) {
-                            rb.set( unionGroups.cardinality() + index, true );
+                        if ( alg.indicator ) {
+                            rb.set( unionGroups.cardinality() + index, PolyBoolean.of( true ) );
                         }
                     }
                     // need to set false when not part of grouping set.
@@ -421,6 +425,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
                 sink.send( rb.build() );
             }
         }
+
     }
 
 
@@ -441,17 +446,19 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
                 r.set( rowIndex, get( accIndex ).end() );
             }
         }
+
     }
 
 
     /**
      * Defines function implementation for things like {@code count()} and {@code sum()}.
      */
-    private interface Accumulator {
+    private interface Accumulator<T> {
 
-        void send( Row row );
+        void send( Row<T> row );
 
-        Object end();
+        PolyValue end();
+
     }
 
 
@@ -482,6 +489,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public int result( int accumulator ) {
             return accumulator;
         }
+
     }
 
 
@@ -512,6 +520,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public long result( long accumulator ) {
             return accumulator;
         }
+
     }
 
 
@@ -542,6 +551,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public double result( double accumulator ) {
             return accumulator;
         }
+
     }
 
 
@@ -580,6 +590,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public T result( T accumulator ) {
             return accumulator;
         }
+
     }
 
 
@@ -591,6 +602,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public MinInt() {
             super( Integer.MAX_VALUE, Math::min );
         }
+
     }
 
 
@@ -602,6 +614,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public MinLong() {
             super( Long.MAX_VALUE, Math::min );
         }
+
     }
 
 
@@ -613,6 +626,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public MinFloat() {
             super( Float.MAX_VALUE, Math::min );
         }
+
     }
 
 
@@ -624,6 +638,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public MinDouble() {
             super( Double.MAX_VALUE, Math::max );
         }
+
     }
 
 
@@ -635,6 +650,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public MaxInt() {
             super( Integer.MIN_VALUE, Math::max );
         }
+
     }
 
 
@@ -646,6 +662,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public MaxLong() {
             super( Long.MIN_VALUE, Math::max );
         }
+
     }
 
 
@@ -657,6 +674,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public MaxFloat() {
             super( Float.MIN_VALUE, Math::max );
         }
+
     }
 
 
@@ -668,6 +686,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public MaxDouble() {
             super( Double.MIN_VALUE, Math::max );
         }
+
     }
 
 
@@ -706,6 +725,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
         public Accumulator get() {
             return new UdaAccumulator( this );
         }
+
     }
 
 
@@ -748,47 +768,49 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
 
 
         @Override
-        public Object end() {
+        public PolyValue end() {
             if ( factory.nullIfEmpty && empty ) {
                 return null;
             }
             final Object[] args = { value };
             try {
-                return factory.aggFunction.resultMethod.invoke( factory.instance, args );
+                return (PolyValue) factory.aggFunction.resultMethod.invoke( factory.instance, args );
             } catch ( IllegalAccessException | InvocationTargetException e ) {
                 throw new RuntimeException( e );
             }
         }
+
     }
 
 
     /**
      * Accumulator that applies a filter to another accumulator. The filter is a BOOLEAN field in the input row.
      */
-    private static class FilterAccumulator implements Accumulator {
+    private static class FilterAccumulator<T> implements Accumulator<T> {
 
-        private final Accumulator accumulator;
+        private final Accumulator<T> accumulator;
         private final int filterArg;
 
 
-        FilterAccumulator( Accumulator accumulator, int filterArg ) {
+        FilterAccumulator( Accumulator<T> accumulator, int filterArg ) {
             this.accumulator = accumulator;
             this.filterArg = filterArg;
         }
 
 
         @Override
-        public void send( Row row ) {
-            if ( row.getValues()[filterArg] == Boolean.TRUE ) {
+        public void send( Row<T> row ) {
+            if ( ((PolyValue) row.getValues()[filterArg]).asBoolean().value == Boolean.TRUE ) {
                 accumulator.send( row );
             }
         }
 
 
         @Override
-        public Object end() {
+        public PolyValue end() {
             return accumulator.end();
         }
-    }
-}
 
+    }
+
+}

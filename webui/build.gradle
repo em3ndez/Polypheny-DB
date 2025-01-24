@@ -1,6 +1,8 @@
-group "org.polypheny"
+plugins {
+    id("de.undercouch.download") version "5.6.0"
+}
 
-version = versionMajor + "." + versionMinor + versionQualifier
+group "org.polypheny"
 
 
 configurations.all {
@@ -16,28 +18,22 @@ configurations {
 
 dependencies {
     implementation project(":core")
-    implementation project(":statistic")
-    implementation project(":explore-by-example")
+    implementation project(":monitoring")
+
+    //uiFiles group: "org.polypheny", name: "polypheny-ui", version: polypheny_ui_version
 
     implementation group: "commons-io", name: "commons-io", version: commons_io_version  // Apache 2.0
+    implementation group: "io.javalin", name: "javalin", version: javalin_version // Apache 2.0
+    api group: 'org.reflections', name: 'reflections', version: reflections_version // Apache 2.0
 
-    uiFiles group: "org.polypheny", name: "polypheny-ui", version: polypheny_ui_version
+    implementation group: "com.j256.simplemagic", name: "simplemagic", version: simplemagic_version // ISC
 
-    implementation group: "com.sparkjava", name: "spark-core", version: spark_core_version  // Apache 2.0
-
-    implementation group: "com.squareup.okhttp3", name: "okhttp", version: okhttp_version  // Apache 2.0
-
-    implementation group: 'com.konghq', name: 'unirest-java', version: unirest_version  // MIT
-
-    implementation group: "net.sf.opencsv", name: "opencsv", version: opencsv_version  // Apache 2.0
-
-    implementation group: 'com.j256.simplemagic', name: 'simplemagic', version: simplemagic_version // ISC
+    implementation group: "com.fasterxml.jackson.core", name: "jackson-core", version: jackson_core_version // Apache 2.0
+    implementation group: "com.fasterxml.jackson.core", name: "jackson-annotations", version: jackson_annotations_version // Apache 2.0
 
 
     // --- Test Compile ---
     testImplementation project(path: ":core", configuration: "tests")
-
-    testImplementation group: "junit", name: "junit", version: junit_version
 }
 
 
@@ -45,17 +41,16 @@ sourceSets {
     main {
         java {
             srcDirs = ["src/main/java"]
-            outputDir = file(project.buildDir.absolutePath + "/classes")
         }
         resources {
-            srcDirs = ["src/main/resources", "$buildDir/webapp"]
+            srcDirs = ["src/main/resources", "build/resources/main"]
         }
         output.resourcesDir = file(project.buildDir.absolutePath + "/classes")
     }
     test {
         java {
             srcDirs = ["src/test/java"]
-            outputDir = file(project.buildDir.absolutePath + "/test-classes")
+            destinationDirectory.set(file(project.buildDir.absolutePath + "/test-classes"))
         }
         resources {
             srcDirs = ["src/test/resources"]
@@ -64,20 +59,60 @@ sourceSets {
     }
 }
 
+compileJava {
+    dependsOn(":monitoring:processResources")
+}
 
-// unzip ui files
-task unzipUiFiles(type: Copy) {
-    from zipTree(configurations.uiFiles.singleFile)
-    into "$buildDir/webapp"
-    doLast {
-        file("$buildDir/webapp/index").mkdirs()
-        ant.move file: "$buildDir/webapp/webapp/index.html",
-                toDir: "$buildDir/webapp/index/"
+
+processResources {
+    setDuplicatesStrategy(DuplicatesStrategy.WARN)
+    if (!project.hasProperty('withoutpullingUi')) {
+        dependsOn(":webui:downloadUiZip")
     }
 }
 
-classes.dependsOn(unzipUiFiles)
 
+gradle.taskGraph.whenReady { taskGraph ->
+    if (!project.hasProperty('withoutpullingUi')
+        && !layout.buildDirectory.get().file("polypheny-ui.zip").asFile.exists()) {
+        println("Pulling UI files")
+        handleUi.dependsOn downloadUiZip
+    }
+}
+
+task downloadUiZip(type: Download) {
+    src 'https://artifacts.polypheny.com/ui/polypheny-ui.zip'
+    dest "${layout.buildDirectory.asFile.get().absolutePath}/classes/polypheny-ui.zip"
+    overwrite true
+    onlyIfModified true
+}
+
+private Object getPolyphenyHome() {
+    def homeDir = System.getProperty('user.home');
+    def polyphenyDir = System.getenv('POLYPHENY_HOME') ?: "${homeDir}/.polypheny"
+    polyphenyDir
+}
+
+task deleteUiOverwrite() {
+    def home = getPolyphenyHome()
+    def ui = file("${home}/ui")
+    if (ui.exists() && ui.canWrite()) {
+        delete ui
+    }
+}
+
+clean.dependsOn(deleteUiOverwrite)
+
+build.dependsOn(":webui:handleUi")
+
+
+task handleUi() {
+    // empty on purpose due to gradle weirdness
+}
+
+if (!project.hasProperty('withoutpullingUi')) {
+    handleUi.finalizedBy downloadUiZip
+}
 
 /**
  * JARs
@@ -88,9 +123,9 @@ jar {
         attributes "Copyright": "The Polypheny Project (polypheny.org)"
         attributes "Version": "$project.version"
     }
-    from("$buildDir/webapp") // include webapp files
+    duplicatesStrategy = 'include'
 }
 java {
-    withJavadocJar()
-    withSourcesJar()
+    //withJavadocJar()
+    //withSourcesJar()
 }

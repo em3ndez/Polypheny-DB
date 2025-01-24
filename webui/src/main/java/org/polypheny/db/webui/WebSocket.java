@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,34 +17,49 @@
 package org.polypheny.db.webui;
 
 
-import com.google.gson.Gson;
+import io.javalin.websocket.WsCloseContext;
+import io.javalin.websocket.WsConfig;
+import io.javalin.websocket.WsConnectContext;
+import io.javalin.websocket.WsMessageContext;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Consumer;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.jetty.websocket.api.Session;
-import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
-import org.eclipse.jetty.websocket.api.annotations.OnWebSocketConnect;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
-import org.polypheny.db.information.InformationManager;
-import org.polypheny.db.webui.models.Result;
+import org.polypheny.db.catalog.Catalog;
+import org.polypheny.db.catalog.entity.logical.LogicalNamespace;
+import org.polypheny.db.catalog.exceptions.GenericRuntimeException;
+import org.polypheny.db.catalog.logistic.DataModel;
+import org.polypheny.db.languages.QueryLanguage;
+import org.polypheny.db.processing.QueryContext;
+import org.polypheny.db.transaction.PolyXid;
+import org.polypheny.db.type.entity.graph.PolyGraph;
+import org.polypheny.db.util.Pair;
+import org.polypheny.db.webui.crud.LanguageCrud;
+import org.polypheny.db.webui.models.requests.AlgRequest;
+import org.polypheny.db.webui.models.requests.GraphRequest;
 import org.polypheny.db.webui.models.requests.QueryRequest;
-import org.polypheny.db.webui.models.requests.RelAlgRequest;
+import org.polypheny.db.webui.models.requests.RegisterRequest;
+import org.polypheny.db.webui.models.requests.RequestModel;
 import org.polypheny.db.webui.models.requests.UIRequest;
+import org.polypheny.db.webui.models.results.RelationalResult;
+import org.polypheny.db.webui.models.results.Result;
 
 
 @org.eclipse.jetty.websocket.api.annotations.WebSocket
 @Slf4j
-public class WebSocket {
+public class WebSocket implements Consumer<WsConfig> {
 
     private static final Queue<Session> sessions = new ConcurrentLinkedQueue<>();
+    public static final String POLYPHENY_UI = "Polypheny-UI";
     private final Crud crud;
-    private final HashMap<Session, Set<String>> queryAnalyzers = new HashMap<>();
-    private static final Gson gson = new Gson();
+    private final ConcurrentHashMap<String, Set<String>> queryAnalyzers = new ConcurrentHashMap<>();
 
 
     WebSocket( Crud crud ) {
@@ -52,18 +67,16 @@ public class WebSocket {
     }
 
 
-    @OnWebSocketConnect
-    public void connected( final Session session ) {
-        log.debug( "UI connected to websocket" );
-        sessions.add( session );
+    public void connected( final WsConnectContext ctx ) {
+        log.debug( "UI connected to WebSocket" );
+        sessions.add( ctx.session );
     }
 
 
-    @OnWebSocketClose
-    public void closed( final Session session, final int statusCode, final String reason ) {
-        log.debug( "UI disconnected from websocket" );
-        sessions.remove( session );
-        cleanup( session );
+    public void closed( WsCloseContext ctx ) {
+        log.debug( "UI disconnected from WebSocket" );
+        sessions.remove( ctx.session );
+        Crud.cleanupOldSession( queryAnalyzers, ctx.getSessionId() );
     }
 
 
@@ -77,92 +90,131 @@ public class WebSocket {
     }
 
 
-    public static void sendMessage( Session session, String message ) {
+    public static synchronized void sendMessage( Session session, String message ) {
         try {
             session.getRemote().sendString( message );
         } catch ( IOException e ) {
-            log.error( "Could not send websocket message to UI", e );
+            log.error( "Could not send WebSocket message to UI", e );
         }
-    }
-
-
-    public static void sendMessage( final Session session, final Object message ) {
-        sendMessage( session, gson.toJson( message ) );
     }
 
 
     @OnWebSocketMessage
-    public void onMessage( Session session, String message ) {
-        if ( message.equals( "\"keepalive\"" ) ) {
+    public void onMessage( final WsMessageContext ctx ) {
+        if ( ctx.message().equals( "\"keepalive\"" ) ) {
             return;
         }
         //close analyzers of a previous query that was sent over the same socket.
-        cleanup( session );
+        Crud.cleanupOldSession( queryAnalyzers, ctx.getSessionId() );
 
-        Gson gson = new Gson();
-        UIRequest request = gson.fromJson( message, UIRequest.class );
+        RequestModel request = ctx.messageAsClass( RequestModel.class );
         Set<String> xIds = new HashSet<>();
-        switch ( request.requestType ) {
+        switch ( request.type ) {
+            case "GraphRequest":
+                GraphRequest graphRequest = ctx.messageAsClass( GraphRequest.class );
+                Pair<PolyXid, PolyGraph> xidGraph = LanguageCrud.getGraph( Catalog.snapshot().getNamespace( graphRequest.namespace ).orElseThrow().name, crud.getTransactionManager(), ctx.session );
+
+                xIds.add( xidGraph.left.toString() );
+
+                ctx.send( xidGraph.right.toJson() );
+
+                break;
             case "QueryRequest":
-                QueryRequest queryRequest = gson.fromJson( message, QueryRequest.class );
-                ArrayList<Result> results;
-                try {
-                    results = crud.anyQuery( queryRequest, session );
-                } catch ( Throwable t ) {
-                    sendMessage( session, new Result[]{ new Result( t ) } );
-                    return;
-                }
-                for ( Result result : results ) {
-                    if ( result.getXid() != null ) {
-                        xIds.add( result.getXid() );
+                QueryRequest queryRequest = ctx.messageAsClass( QueryRequest.class );
+                QueryLanguage language = QueryLanguage.from( queryRequest.language );
+
+                List<? extends Result<?, ?>> results = LanguageCrud.anyQueryResult(
+                        QueryContext.builder()
+                                .query( queryRequest.query )
+                                .language( language )
+                                .isAnalysed( queryRequest.analyze )
+                                .usesCache( queryRequest.cache )
+                                .namespaceId( LanguageCrud.getNamespaceIdOrDefault( queryRequest.namespace ) )
+                                .origin( POLYPHENY_UI )
+                                .batch( queryRequest.noLimit ? -1 : crud.getPageSize() )
+                                .transactionManager( crud.getTransactionManager() )
+                                .informationTarget( i -> i.setSession( ctx.session ) ).build(), queryRequest );
+
+                for ( Result<?, ?> result : results ) {
+                    if ( result.xid != null ) {
+                        xIds.add( result.xid );
                     }
                 }
-                sendMessage( session, results );
+
+                ctx.send( results );
+                break;
+            case "RegisterRequest":
+                RegisterRequest registerRequest = ctx.messageAsClass( RegisterRequest.class );
+                crud.authCrud.register( registerRequest, ctx );
                 break;
             case "RelAlgRequest":
-            case "TableRequest":
-                Result result;
-                if ( request.requestType.equals( "RelAlgRequest" ) ) {
-                    RelAlgRequest relAlgRequest = gson.fromJson( message, RelAlgRequest.class );
+            case "EntityRequest":
+                Result<?, ?> result;
+                if ( request.type.equals( "RelAlgRequest" ) ) {
+                    AlgRequest algRequest = ctx.messageAsClass( AlgRequest.class );
                     try {
-                        result = crud.executeRelAlg( relAlgRequest, session );
+                        result = crud.executeAlg( algRequest, ctx.session );
                     } catch ( Throwable t ) {
-                        sendMessage( session, new Result( t ) );
+                        ctx.send( RelationalResult.builder().error( t.getMessage() ).build() );
                         return;
                     }
                 } else {//TableRequest, is equal to UIRequest
-                    UIRequest uiRequest = gson.fromJson( message, UIRequest.class );
+                    UIRequest uiRequest = ctx.messageAsClass( UIRequest.class );
                     try {
-                        result = crud.getTable( uiRequest );
+                        LogicalNamespace namespace = Catalog.snapshot().getNamespace( uiRequest.namespace ).orElse( null );
+                        result = switch ( namespace == null ? DataModel.RELATIONAL : namespace.dataModel ) {
+                            case RELATIONAL -> crud.getTable( uiRequest );
+                            case DOCUMENT -> {
+                                String entity = Catalog.snapshot().doc().getCollection( uiRequest.entityId ).map( c -> c.name ).orElse( "" );
+                                yield LanguageCrud.anyQueryResult(
+                                        QueryContext.builder()
+                                                .query( String.format( "db.%s.find({})", entity ) )
+                                                .language( QueryLanguage.from( "mongo" ) )
+                                                .origin( POLYPHENY_UI )
+                                                .batch( uiRequest.noLimit ? -1 : crud.getPageSize() )
+                                                .transactionManager( crud.getTransactionManager() )
+                                                .informationTarget( i -> i.setSession( ctx.session ) )
+                                                .namespaceId( namespace.id )
+                                                .build(), uiRequest ).get( 0 );
+                            }
+                            case GRAPH -> LanguageCrud.anyQueryResult(
+                                    QueryContext.builder()
+                                            .query( "MATCH (n) RETURN n" )
+                                            .language( QueryLanguage.from( "cypher" ) )
+                                            .origin( POLYPHENY_UI )
+                                            .batch( uiRequest.noLimit ? -1 : crud.getPageSize() )
+                                            .namespaceId( namespace.id )
+                                            .transactionManager( crud.getTransactionManager() )
+                                            .informationTarget( i -> i.setSession( ctx.session ) )
+                                            .build(), uiRequest ).get( 0 );
+                        };
+                        if ( result == null ) {
+                            throw new GenericRuntimeException( "Could not load data." );
+                        }
+
                     } catch ( Throwable t ) {
-                        sendMessage( session, new Result( t ) );
+                        ctx.send( RelationalResult.builder().error( t.getMessage() ).build() );
                         return;
                     }
                 }
-                if ( result.getXid() != null ) {
-                    xIds.add( result.getXid() );
+                if ( result.xid != null ) {
+                    xIds.add( result.xid );
                 }
-                sendMessage( session, result );
+                ctx.send( result );
                 break;
             default:
-                throw new RuntimeException( "Unexpected websocket request: " + request.requestType );
+                throw new GenericRuntimeException( "Unexpected WebSocket request: " + request.type );
         }
-        queryAnalyzers.put( session, xIds );
+        queryAnalyzers.put( ctx.getSessionId(), xIds );
     }
 
 
-    /**
-     * Closes queryAnalyzers and deletes temporary files.
-     */
-    private void cleanup( final Session session ) {
-        Set<String> xIds = queryAnalyzers.remove( session );
-        if ( xIds == null || xIds.size() == 0 ) {
-            return;
-        }
-        for ( String xId : xIds ) {
-            InformationManager.close( xId );
-            TemporalFileManager.deleteFilesOfTransaction( xId );
-        }
+    @Override
+    public void accept( WsConfig wsConfig ) {
+        wsConfig.onConnect( this::connected );
+        wsConfig.onMessage( this::onMessage );
+
+        wsConfig.onClose( this::closed );
     }
 
 }

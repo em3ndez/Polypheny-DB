@@ -1,0 +1,56 @@
+group "org.polypheny"
+
+
+dependencies {
+    implementation project(":core")
+    implementation group: "com.github.oshi", name: "oshi-core", version: oshi_core_version  // MIT License
+
+    // --- Test Compile ---
+    testImplementation project(path: ":core", configuration: "tests")
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ["src/main/java"]
+        }
+        resources {
+            srcDirs = ["src/main/resources"]
+        }
+        output.resourcesDir = file(project.buildDir.absolutePath + "/classes")
+    }
+    test {
+        java {
+            srcDirs = ["src/test/java"]
+            destinationDirectory.set(file(project.buildDir.absolutePath + "/test-classes"))
+        }
+        resources {
+            srcDirs = ["src/test/resources"]
+        }
+        output.resourcesDir = file(project.buildDir.absolutePath + "/test-classes")
+    }
+}
+
+compileJava {
+    dependsOn(":core:processResources")
+}
+
+delombok {
+    dependsOn(":core:processResources")
+}
+
+
+/**
+ * JARs
+ */
+jar {
+    manifest {
+        attributes "Manifest-Version": "1.0"
+        attributes "Copyright": "The Polypheny Project (polypheny.org)"
+        attributes "Version": "$project.version"
+    }
+}
+java {
+    withJavadocJar()
+    withSourcesJar()
+}

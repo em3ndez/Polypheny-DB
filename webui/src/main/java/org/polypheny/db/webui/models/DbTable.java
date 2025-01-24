@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,8 @@ package org.polypheny.db.webui.models;
 
 import java.util.ArrayList;
 import lombok.Getter;
-import org.polypheny.db.catalog.Catalog.TableType;
+import org.polypheny.db.catalog.logistic.EntityType;
+import org.polypheny.db.webui.models.catalog.UiColumnDefinition;
 
 
 /**
@@ -31,7 +32,7 @@ public class DbTable {
     private final String tableName;
     @Getter
     private final String schema;
-    private final ArrayList<DbColumn> columns = new ArrayList<>();
+    private final ArrayList<UiColumnDefinition> columns = new ArrayList<>();
     private final ArrayList<String> primaryKeyFields = new ArrayList<>();
     private final ArrayList<String> uniqueColumns = new ArrayList<>();
     private final boolean modifiable;
@@ -44,13 +45,13 @@ public class DbTable {
      * @param tableName name of the table
      * @param schema name of the schema this table belongs to
      * @param modifiable If the table is modifiable
-     * @param tableType TableType (see Catalog)
+     * @param entityType EntityType (see Catalog)
      */
-    public DbTable( final String tableName, final String schema, final boolean modifiable, final TableType tableType ) {
+    public DbTable( final String tableName, final String schema, final boolean modifiable, final EntityType entityType ) {
         this.tableName = tableName;
         this.schema = schema;
         this.modifiable = modifiable;
-        this.tableType = tableType.toString();
+        this.tableType = entityType.toString();
     }
 
 
@@ -59,7 +60,7 @@ public class DbTable {
      *
      * @param col column that is part of this table
      */
-    public void addColumn( final DbColumn col ) {
+    public void addColumn( final UiColumnDefinition col ) {
         this.columns.add( col );
     }
 

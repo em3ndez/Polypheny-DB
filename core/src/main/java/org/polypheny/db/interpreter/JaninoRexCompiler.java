@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,26 +53,26 @@ import org.codehaus.commons.compiler.CompilerFactoryFactory;
 import org.codehaus.commons.compiler.IClassBodyEvaluator;
 import org.codehaus.commons.compiler.ICompilerFactory;
 import org.polypheny.db.adapter.DataContext;
-import org.polypheny.db.adapter.enumerable.JavaRowFormat;
-import org.polypheny.db.adapter.enumerable.PhysTypeImpl;
-import org.polypheny.db.adapter.enumerable.RexToLixTranslator;
-import org.polypheny.db.adapter.enumerable.RexToLixTranslator.InputGetter;
-import org.polypheny.db.adapter.enumerable.RexToLixTranslator.InputGetterImpl;
+import org.polypheny.db.algebra.constant.ConformanceEnum;
+import org.polypheny.db.algebra.enumerable.JavaTupleFormat;
+import org.polypheny.db.algebra.enumerable.PhysTypeImpl;
+import org.polypheny.db.algebra.enumerable.RexToLixTranslator;
+import org.polypheny.db.algebra.enumerable.RexToLixTranslator.InputGetter;
+import org.polypheny.db.algebra.enumerable.RexToLixTranslator.InputGetterImpl;
+import org.polypheny.db.algebra.type.AlgDataType;
 import org.polypheny.db.config.RuntimeConfig;
 import org.polypheny.db.information.InformationCode;
 import org.polypheny.db.information.InformationGroup;
 import org.polypheny.db.information.InformationManager;
 import org.polypheny.db.information.InformationPage;
-import org.polypheny.db.jdbc.JavaTypeFactoryImpl;
-import org.polypheny.db.rel.type.RelDataType;
+import org.polypheny.db.prepare.JavaTypeFactoryImpl;
 import org.polypheny.db.rex.RexBuilder;
 import org.polypheny.db.rex.RexNode;
 import org.polypheny.db.rex.RexProgram;
 import org.polypheny.db.rex.RexProgramBuilder;
-import org.polypheny.db.sql.validate.SqlConformance;
-import org.polypheny.db.sql.validate.SqlConformanceEnum;
+import org.polypheny.db.type.entity.PolyValue;
 import org.polypheny.db.util.BuiltInMethod;
-import org.polypheny.db.util.Pair;
+import org.polypheny.db.util.Conformance;
 import org.polypheny.db.util.Util;
 
 
@@ -90,7 +90,7 @@ public class JaninoRexCompiler implements Interpreter.ScalarCompiler {
 
 
     @Override
-    public Scalar compile( List<RexNode> nodes, RelDataType inputRowType, DataContext dataContext ) {
+    public Scalar compile( List<RexNode> nodes, AlgDataType inputRowType, DataContext dataContext ) {
         final RexProgramBuilder programBuilder = new RexProgramBuilder( inputRowType, rexBuilder );
         for ( RexNode node : nodes ) {
             programBuilder.addProject( node, null );
@@ -99,21 +99,19 @@ public class JaninoRexCompiler implements Interpreter.ScalarCompiler {
 
         final BlockBuilder builder = new BlockBuilder();
         final ParameterExpression context_ = Expressions.parameter( Context.class, "context" );
-        final ParameterExpression outputValues_ = Expressions.parameter( Object[].class, "outputValues" );
+        final ParameterExpression outputValues_ = Expressions.parameter( PolyValue[].class, "outputValues" );
         final JavaTypeFactoryImpl javaTypeFactory = new JavaTypeFactoryImpl( rexBuilder.getTypeFactory().getTypeSystem() );
 
         // public void execute(Context, Object[] outputValues)
         final InputGetter inputGetter =
                 new InputGetterImpl(
-                        ImmutableList.of(
-                                Pair.of(
-                                        Expressions.field( context_, BuiltInMethod.CONTEXT_VALUES.field ),
-                                        PhysTypeImpl.of( javaTypeFactory, inputRowType, JavaRowFormat.ARRAY, false ) ) ) );
+                        Expressions.field( context_, BuiltInMethod.CONTEXT_VALUES.field ),
+                        PhysTypeImpl.of( javaTypeFactory, inputRowType, JavaTupleFormat.ARRAY, false ) );
         final Function1<String, InputGetter> correlates = a0 -> {
             throw new UnsupportedOperationException();
         };
         final Expression root = Expressions.field( context_, BuiltInMethod.CONTEXT_ROOT.field );
-        final SqlConformance conformance = SqlConformanceEnum.DEFAULT; // TODO: get this from implementor
+        final Conformance conformance = ConformanceEnum.DEFAULT; // TODO: get this from implementor
         final List<Expression> list = RexToLixTranslator.translateProjects( program, javaTypeFactory, conformance, builder, null, root, inputGetter, correlates );
         for ( int i = 0; i < list.size(); i++ ) {
             builder.add(
@@ -126,7 +124,7 @@ public class JaninoRexCompiler implements Interpreter.ScalarCompiler {
 
 
     /**
-     * Given a method that implements {@link Scalar#execute(Context, Object[])}, adds a bridge method that implements {@link Scalar#execute(Context)}, and compiles.
+     * Given a method that implements {@link Scalar#execute(Context, org.polypheny.db.type.entity.PolyValue[])}, adds a bridge method that implements {@link Scalar#execute(Context)}, and compiles.
      */
     static Scalar baz( ParameterExpression context_, ParameterExpression outputValues_, BlockStatement block, DataContext dataContext ) {
         final List<MemberDeclaration> declarations = new ArrayList<>();
@@ -136,14 +134,14 @@ public class JaninoRexCompiler implements Interpreter.ScalarCompiler {
 
         // public Object execute(Context)
         final BlockBuilder builder = new BlockBuilder();
-        final Expression values_ = builder.append( "values", Expressions.newArrayBounds( Object.class, 1, Expressions.constant( 1 ) ) );
+        final Expression values_ = builder.append( "values", Expressions.newArrayBounds( PolyValue.class, 1, Expressions.constant( 1 ) ) );
         builder.add(
                 Expressions.statement(
                         Expressions.call(
                                 Expressions.parameter( Scalar.class, "this" ),
                                 BuiltInMethod.SCALAR_EXECUTE2.method, context_, values_ ) ) );
         builder.add( Expressions.return_( null, Expressions.arrayIndex( values_, Expressions.constant( 0 ) ) ) );
-        declarations.add( Expressions.methodDecl( Modifier.PUBLIC, Object.class, BuiltInMethod.SCALAR_EXECUTE1.method.getName(), ImmutableList.of( context_ ), builder.toBlock() ) );
+        declarations.add( Expressions.methodDecl( Modifier.PUBLIC, PolyValue.class, BuiltInMethod.SCALAR_EXECUTE1.method.getName(), ImmutableList.of( context_ ), builder.toBlock() ) );
 
         final ClassDeclaration classDeclaration = Expressions.classDecl( Modifier.PUBLIC, "Buzz", null, ImmutableList.of( Scalar.class ), declarations );
         String s = Expressions.toString( declarations, "\n", false );
@@ -185,5 +183,6 @@ public class JaninoRexCompiler implements Interpreter.ScalarCompiler {
         }
         return (Scalar) cbe.createInstance( new StringReader( s ) );
     }
+
 }
 

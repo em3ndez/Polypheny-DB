@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,18 +34,17 @@
 package org.polypheny.db.interpreter;
 
 
+import org.polypheny.db.algebra.enumerable.EnumerableConvention;
+import org.polypheny.db.plan.AlgPlanner;
+import org.polypheny.db.plan.AlgTrait;
+import org.polypheny.db.plan.AlgTraitSet;
 import org.polypheny.db.plan.Convention;
-import org.polypheny.db.plan.ConventionTraitDef;
-import org.polypheny.db.plan.RelOptPlanner;
-import org.polypheny.db.plan.RelTrait;
-import org.polypheny.db.plan.RelTraitDef;
-import org.polypheny.db.plan.RelTraitSet;
 
 
 /**
  * Calling convention that returns results as an {@link org.apache.calcite.linq4j.Enumerable} of object arrays.
  *
- * The relational expression needs to implement {@link org.polypheny.db.runtime.ArrayBindable}. Unlike {@link org.polypheny.db.adapter.enumerable.EnumerableConvention}, no code generation is required.
+ * The relational expression needs to implement {@link org.polypheny.db.runtime.ArrayBindable}. Unlike {@link EnumerableConvention}, no code generation is required.
  */
 public enum BindableConvention implements Convention {
     INSTANCE;
@@ -63,8 +62,8 @@ public enum BindableConvention implements Convention {
 
 
     @Override
-    public Class getInterface() {
-        return BindableRel.class;
+    public Class<?> getInterface() {
+        return BindableAlg.class;
     }
 
 
@@ -75,19 +74,13 @@ public enum BindableConvention implements Convention {
 
 
     @Override
-    public RelTraitDef getTraitDef() {
-        return ConventionTraitDef.INSTANCE;
-    }
-
-
-    @Override
-    public boolean satisfies( RelTrait trait ) {
+    public boolean satisfies( AlgTrait<?> trait ) {
         return this == trait;
     }
 
 
     @Override
-    public void register( RelOptPlanner planner ) {
+    public void register( AlgPlanner planner ) {
     }
 
 
@@ -98,7 +91,7 @@ public enum BindableConvention implements Convention {
 
 
     @Override
-    public boolean useAbstractConvertersForConversion( RelTraitSet fromTraits, RelTraitSet toTraits ) {
+    public boolean useAbstractConvertersForConversion( AlgTraitSet fromTraits, AlgTraitSet toTraits ) {
         return false;
     }
 }

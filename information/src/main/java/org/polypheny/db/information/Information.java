@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,15 @@
 package org.polypheny.db.information;
 
 
-import com.google.gson.Gson;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.experimental.Accessors;
 import lombok.extern.slf4j.Slf4j;
 import org.polypheny.db.information.exception.InformationRuntimeException;
 
@@ -25,27 +33,46 @@ import org.polypheny.db.information.exception.InformationRuntimeException;
 @Slf4j
 public abstract class Information {
 
+    public static ObjectMapper mapper = new ObjectMapper() {{
+        setSerializationInclusion( JsonInclude.Include.NON_NULL );
+        configure( DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false );
+        configure( SerializationFeature.FAIL_ON_EMPTY_BEANS, false );
+        writerWithDefaultPrettyPrinter();
+    }};
+
     /**
      * The id needs to be unique for every Information object.
      */
+    @Getter
+    @JsonProperty
     private final String id;
 
     /**
      * The field type is used by Gson and is needed for the frontend.
      */
-    final String type;
+    @JsonProperty
+    String type;
 
     /**
      * The field informationGroup consists of the id of the InformationGroup to which it belongs.
      */
+    @JsonProperty
     private final String groupId;
 
     /**
      * The information object with lowest uiOrder are rendered first, then those with higher number, then those where uiOrder is null.
      * Field required for GSON.
      */
-    @SuppressWarnings({ "FieldCanBeLocal", "unused" })
+    @Getter
+    @Setter
+    @JsonProperty
     private int uiOrder;
+
+    @JsonProperty
+    @Accessors(fluent = true)
+    @Setter
+    @Getter
+    public boolean fullWidth;
 
     /**
      * Sets the information manager instance this information is registered at.
@@ -57,23 +84,13 @@ public abstract class Information {
     /**
      * Constructor
      *
-     * @param id      Unique id for this Information object
+     * @param id Unique id for this Information object
      * @param groupId The id of the InformationGroup to which this information belongs
      */
     Information( final String id, final String groupId ) {
         this.id = id;
         this.groupId = groupId;
         this.type = this.getClass().getSimpleName();
-    }
-
-
-    /**
-     * Get the id of this Information object.
-     *
-     * @return id of this Information object
-     */
-    public String getId() {
-        return id;
     }
 
 
@@ -101,7 +118,7 @@ public abstract class Information {
      * Returns the actual implementation of this information element.
      *
      * @param clazz The
-     * @return The unwraped object
+     * @return The unwrapped object
      */
     public <T extends Information> T unwrap( final Class<T> clazz ) {
         if ( clazz.isInstance( this ) ) {
@@ -119,8 +136,12 @@ public abstract class Information {
      * @return object as JSON string
      */
     public String asJson() {
-        Gson gson = new Gson();
-        return gson.toJson( this );
+        try {
+            return mapper.writeValueAsString( this );
+        } catch ( JsonProcessingException e ) {
+            log.warn( "Error on serializing an Information" );
+            return null;
+        }
     }
 
 

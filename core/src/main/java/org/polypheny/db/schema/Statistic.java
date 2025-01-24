@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,14 +35,14 @@ package org.polypheny.db.schema;
 
 
 import java.util.List;
-import org.polypheny.db.rel.RelCollation;
-import org.polypheny.db.rel.RelDistribution;
-import org.polypheny.db.rel.RelReferentialConstraint;
+import org.polypheny.db.algebra.AlgCollation;
+import org.polypheny.db.algebra.AlgDistribution;
+import org.polypheny.db.algebra.AlgReferentialConstraint;
 import org.polypheny.db.util.ImmutableBitSet;
 
 
 /**
- * Statistics about a {@link Table}.
+ * Statistics about a {@link Entity}.
  *
  * Each of the methods may return {@code null} meaning "not known".
  *
@@ -63,16 +63,17 @@ public interface Statistic {
     /**
      * Returns the collection of referential constraints (foreign-keys) for this table.
      */
-    List<RelReferentialConstraint> getReferentialConstraints();
+    List<AlgReferentialConstraint> getReferentialConstraints();
 
     /**
      * Returns the collections of columns on which this table is sorted.
      */
-    List<RelCollation> getCollations();
+    List<AlgCollation> getCollations();
 
     /**
      * Returns the distribution of the data in this table.
      */
-    RelDistribution getDistribution();
+    AlgDistribution getDistribution();
+
 }
 

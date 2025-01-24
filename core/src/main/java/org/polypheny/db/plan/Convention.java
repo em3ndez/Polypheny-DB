@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,24 +35,24 @@ package org.polypheny.db.plan;
 
 
 import java.io.Serializable;
-import org.polypheny.db.rel.RelNode;
+import org.polypheny.db.algebra.AlgNode;
 
 
 /**
  * Calling convention trait.
  */
-public interface Convention extends RelTrait, Serializable {
+public interface Convention extends AlgTrait<ConventionTraitDef>, Serializable {
 
     /**
-     * Convention that for a relational expression that does not support any convention. It is not implementable, and has to be transformed to something else in order to be implemented.
+     * Convention that for an algebra expression that does not support any convention. It is not implementable, and has to be transformed to something else in order to be implemented.
      *
      * Relational expressions generally start off in this form.
      *
      * Such expressions always have infinite cost.
      */
-    Convention NONE = new Impl( "NONE", RelNode.class );
+    Convention NONE = new Impl( "NONE", AlgNode.class );
 
-    Class getInterface();
+    Class<?> getInterface();
 
     String getName();
 
@@ -70,11 +70,16 @@ public interface Convention extends RelTrait, Serializable {
      * The convention decides whether it wants to handle other trait conversions, e.g. collation, distribution, etc.  For a given convention, we will only add abstract converters to handle the
      * trait (convention, collation, distribution, etc.) conversions if this function returns true.
      *
-     * @param fromTraits Traits of the RelNode that we are converting from
+     * @param fromTraits Traits of the {@link AlgNode} that we are converting from
      * @param toTraits Target traits
      * @return Whether we should add converters
      */
-    boolean useAbstractConvertersForConversion( RelTraitSet fromTraits, RelTraitSet toTraits );
+    boolean useAbstractConvertersForConversion( AlgTraitSet fromTraits, AlgTraitSet toTraits );
+
+    @Override
+    default ConventionTraitDef getTraitDef() {
+        return ConventionTraitDef.INSTANCE;
+    }
 
     /**
      * Default implementation.
@@ -82,12 +87,12 @@ public interface Convention extends RelTrait, Serializable {
     class Impl implements Convention {
 
         private final String name;
-        private final transient Class<? extends RelNode> relClass;
+        private final Class<? extends AlgNode> algClass;
 
 
-        public Impl( String name, Class<? extends RelNode> relClass ) {
+        public Impl( String name, Class<? extends AlgNode> algClass ) {
             this.name = name;
-            this.relClass = relClass;
+            this.algClass = algClass;
         }
 
 
@@ -98,19 +103,19 @@ public interface Convention extends RelTrait, Serializable {
 
 
         @Override
-        public void register( RelOptPlanner planner ) {
+        public void register( AlgPlanner planner ) {
         }
 
 
         @Override
-        public boolean satisfies( RelTrait trait ) {
+        public boolean satisfies( AlgTrait<?> trait ) {
             return this == trait;
         }
 
 
         @Override
-        public Class getInterface() {
-            return relClass;
+        public Class<?> getInterface() {
+            return algClass;
         }
 
 
@@ -121,23 +126,16 @@ public interface Convention extends RelTrait, Serializable {
 
 
         @Override
-        public RelTraitDef getTraitDef() {
-            return ConventionTraitDef.INSTANCE;
-        }
-
-
-        @Override
         public boolean canConvertConvention( Convention toConvention ) {
             return false;
         }
 
 
         @Override
-        public boolean useAbstractConvertersForConversion( RelTraitSet fromTraits, RelTraitSet toTraits ) {
+        public boolean useAbstractConvertersForConversion( AlgTraitSet fromTraits, AlgTraitSet toTraits ) {
             return false;
         }
 
     }
 
 }
-

@@ -1,22 +1,26 @@
 group "org.polypheny"
 
-version = versionMajor + "." + versionMinor + versionQualifier
-
 
 dependencies {
-    implementation group: "com.sparkjava", name: "spark-core", version: spark_core_version  // Apache 2.0
+    implementation group: "io.javalin", name: "javalin", version: javalin_version // Apache 2.0
+
+    implementation group: 'net.lingala.zip4j', name: 'zip4j', version: zip4j_version // Apache 2.0
+
+
     implementation group: "com.google.code.gson", name: "gson", version: gson_version  // Apache 2.0
-    
+
+    implementation group: "com.fasterxml.jackson.core", name: "jackson-databind", version: jackson_databind_version  // Apache 2.0
+
     implementation group: "com.typesafe", name: "config", version: typesafe_config_version  // Apache 2.0
 
-    implementation group: "org.reflections", name: "reflections", version: reflections_version  // BSD 2-clause
+    implementation group: "org.reflections", name: "reflections", version: reflections_version // BSD 2-clause
+
 
     implementation group: "com.google.guava", name: "guava", version: guava_version  // Apache 2.0
-    
+
 
     // --- Test Compile ---
     testImplementation project(path: ":core", configuration: "tests")
-    testImplementation group: "junit", name: "junit", version: junit_version
 }
 
 
@@ -24,7 +28,6 @@ sourceSets {
     main {
         java {
             srcDirs = ["src/main/java"]
-            outputDir = file(project.buildDir.absolutePath + "/classes")
         }
         resources {
             srcDirs = ["src/main/resources"]
@@ -34,7 +37,7 @@ sourceSets {
     test {
         java {
             srcDirs = ["src/test/java"]
-            outputDir = file(project.buildDir.absolutePath + "/test-classes")
+            destinationDirectory.set(file(project.buildDir.absolutePath + "/test-classes"))
         }
         resources {
             srcDirs = ["src/test/resources"]
@@ -48,10 +51,9 @@ sourceSets {
  * JavaDoc
  */
 javadoc {
-    if(JavaVersion.current().isJava9Compatible()) {
-        options.addBooleanOption("html5", true)
-    }
-    // suppress most of the warnings
+    options.addBooleanOption("html5", true)
+
+    // Suppress most of the warnings
     options.addStringOption("Xdoclint:none", "-quiet")
     // Include private fields in JavaDoc
     options.memberLevel = JavadocMemberLevel.PRIVATE

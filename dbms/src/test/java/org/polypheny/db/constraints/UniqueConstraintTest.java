@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,29 +23,21 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.calcite.avatica.AvaticaSqlException;
-import org.junit.AfterClass;
-import org.junit.Assert;
-import org.junit.BeforeClass;
-import org.junit.Ignore;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-import org.junit.runners.Parameterized.Parameters;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.polypheny.db.TestHelper;
 import org.polypheny.db.TestHelper.JdbcConnection;
+import org.polypheny.jdbc.PrismInterfaceServiceException;
 
 
 @SuppressWarnings({ "SqlDialectInspection", "SqlNoDataSourceInspection" })
 @Slf4j
-@Ignore
-@RunWith(Parameterized.class)
+@Tag("adapter")
 public class UniqueConstraintTest {
-
-    @Parameters(name = "Create Indexes: {0}")
-    public static Object[] data() {
-        return new Object[]{ false, true };
-    }
 
 
     private static final String CREATE_TABLE_CONSTRAINT_STATEMENTS =
@@ -64,25 +56,17 @@ public class UniqueConstraintTest {
             "ALTER TABLE constraint_test ADD INDEX idx_a ON (a)",
             "ALTER TABLE constraint_test ADD INDEX idx_b ON (b)"
     };
+    private static TestHelper helper;
 
 
-    private final boolean createIndexes;
-
-
-    public UniqueConstraintTest( boolean createIndexes ) {
-        this.createIndexes = createIndexes;
-    }
-
-
-    @BeforeClass
+    @BeforeAll
     public static void start() throws SQLException {
         // Ensures that Polypheny-DB is running
-        //noinspection ResultOfMethodCallIgnored
-        TestHelper.getInstance();
+
+        helper = TestHelper.getInstance();
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
-                // Create schema
                 statement.executeUpdate( "ALTER CONFIG 'runtime/uniqueConstraintEnforcement' SET true" );
                 statement.executeUpdate( "ALTER CONFIG 'runtime/foreignKeyEnforcement' SET true" );
                 statement.executeUpdate( "ALTER CONFIG 'runtime/polystoreIndexesSimplify' SET true" );
@@ -91,12 +75,11 @@ public class UniqueConstraintTest {
     }
 
 
-    @AfterClass
+    @AfterAll
     public static void shutdown() throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
-                // Create schema
                 statement.executeUpdate( "ALTER CONFIG 'runtime/uniqueConstraintEnforcement' SET false" );
                 statement.executeUpdate( "ALTER CONFIG 'runtime/foreignKeyEnforcement' SET false" );
                 statement.executeUpdate( "ALTER CONFIG 'runtime/polystoreIndexesSimplify' SET false" );
@@ -105,14 +88,15 @@ public class UniqueConstraintTest {
     }
 
 
-    @Test
-    public void insertNoConflictTest() throws SQLException {
+    @ParameterizedTest(name = "{index}. Create Index: {0}")
+    @ValueSource(booleans = { false, true })
+    public void insertNoConflictTest( boolean useIndex ) throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
                 // Create schema
                 statement.executeUpdate( CREATE_TABLE_CONSTRAINT_STATEMENTS );
-                if ( createIndexes ) {
+                if ( useIndex && helper.storeSupportsIndex() ) {
                     // Add indexes
                     for ( String s : ALTER_TABLE_ADD_INDEX_STATEMENTS ) {
                         statement.executeUpdate( s );
@@ -136,14 +120,15 @@ public class UniqueConstraintTest {
     }
 
 
-    @Test
-    public void insertExternalConflictTest() throws SQLException {
+    @ParameterizedTest(name = "{index}. Create Index: {0}")
+    @ValueSource(booleans = { false, true })
+    public void insertExternalConflictTest( boolean useIndex ) throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
                 // Create schema
                 statement.executeUpdate( CREATE_TABLE_CONSTRAINT_STATEMENTS );
-                if ( createIndexes ) {
+                if ( useIndex && helper.storeSupportsIndex() ) {
                     // Add indexes
                     for ( String s : ALTER_TABLE_ADD_INDEX_STATEMENTS ) {
                         statement.executeUpdate( s );
@@ -152,22 +137,20 @@ public class UniqueConstraintTest {
 
                 try {
                     statement.executeUpdate( "INSERT INTO constraint_test VALUES (1, 1, 1, 1)" );
-                    try {
-                        statement.executeUpdate( "INSERT INTO constraint_test VALUES (1, 2, 3, 4)" );
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Insert violates unique constraint" ) ) {
-                            throw new RuntimeException( "Unexpected exception", e );
-                        }
-                    }
-                    try {
-                        statement.executeUpdate( "INSERT INTO constraint_test VALUES (2, 1, 1, 4)" );
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Insert violates unique constraint" ) ) {
-                            throw new RuntimeException( "Unexpected exception", e );
-                        }
-                    }
+
+                    Assertions.assertThrows(
+                            PrismInterfaceServiceException.class,
+                            () -> statement.executeUpdate( "INSERT INTO constraint_test VALUES (1, 2, 3, 4)" ),
+                            "Insert violates unique constraint"
+                    );
+
+                    Assertions.assertThrows(
+                            PrismInterfaceServiceException.class,
+                            () -> statement.executeUpdate( "INSERT INTO constraint_test VALUES (2, 1, 1, 4)" ),
+                            "Insert violates unique constraint"
+                    );
+
+                    connection.rollback();
                     TestHelper.checkResultSet(
                             statement.executeQuery( "SELECT * FROM constraint_test" ),
                             ImmutableList.of( new Object[]{ 1, 1, 1, 1 } )
@@ -180,14 +163,15 @@ public class UniqueConstraintTest {
     }
 
 
-    @Test
-    public void insertInternalConflictTest() throws SQLException {
+    @ParameterizedTest(name = "{index}. Create Index: {0}")
+    @ValueSource(booleans = { false, true })
+    public void insertInternalConflictTest( boolean useIndex ) throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
                 // Create schema
                 statement.executeUpdate( CREATE_TABLE_CONSTRAINT_STATEMENTS );
-                if ( createIndexes ) {
+                if ( useIndex && helper.storeSupportsIndex() ) {
                     // Add indexes
                     for ( String s : ALTER_TABLE_ADD_INDEX_STATEMENTS ) {
                         statement.executeUpdate( s );
@@ -196,14 +180,14 @@ public class UniqueConstraintTest {
 
                 try {
                     statement.executeUpdate( "INSERT INTO constraint_test VALUES (1, 1, 1, 1)" );
-                    try {
-                        statement.executeUpdate( "INSERT INTO constraint_test VALUES (2, 2, 3, 4), (4, 2, 3, 1)" );
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Insert violates unique constraint" ) ) {
-                            throw new RuntimeException( "Unexpected exception", e );
-                        }
-                    }
+
+                    Assertions.assertThrows(
+                            PrismInterfaceServiceException.class,
+                            () -> statement.executeUpdate( "INSERT INTO constraint_test VALUES (2, 2, 3, 4), (4, 2, 3, 1)" ),
+                            "Insert violates unique constraint"
+                    );
+                    connection.rollback();
+
                     TestHelper.checkResultSet(
                             statement.executeQuery( "SELECT * FROM constraint_test" ),
                             ImmutableList.of( new Object[]{ 1, 1, 1, 1 } )
@@ -216,14 +200,15 @@ public class UniqueConstraintTest {
     }
 
 
-    @Test
-    public void insertSelectNoConflictTest() throws SQLException {
+    @ParameterizedTest(name = "{index}. Create Index: {0}")
+    @ValueSource(booleans = { false, true })
+    public void insertSelectNoConflictTest( boolean useIndex ) throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
                 // Create schema
                 statement.executeUpdate( CREATE_TABLE_CONSTRAINT_STATEMENTS );
-                if ( createIndexes ) {
+                if ( useIndex && helper.storeSupportsIndex() ) {
                     // Add indexes
                     for ( String s : ALTER_TABLE_ADD_INDEX_STATEMENTS ) {
                         statement.executeUpdate( s );
@@ -233,6 +218,7 @@ public class UniqueConstraintTest {
                 try {
                     statement.executeUpdate( "INSERT INTO constraint_test VALUES (1, 1, 1, 1), (2, 2, 2, 2)" );
                     statement.executeUpdate( "INSERT INTO constraint_test SELECT ctid + 2 AS ctid, a, b + 2 AS b, c FROM constraint_test" );
+
                     TestHelper.checkResultSet(
                             statement.executeQuery( "SELECT * FROM constraint_test ORDER BY ctid" ),
                             ImmutableList.of(
@@ -250,14 +236,15 @@ public class UniqueConstraintTest {
     }
 
 
-    @Test
-    public void insertSelectExternalConflictTest() throws SQLException {
+    @ParameterizedTest(name = "{index}. Create Index: {0}")
+    @ValueSource(booleans = { false, true })
+    public void insertSelectExternalConflictTest( boolean useIndex ) throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
                 // Create schema
                 statement.executeUpdate( CREATE_TABLE_CONSTRAINT_STATEMENTS );
-                if ( createIndexes ) {
+                if ( useIndex && helper.storeSupportsIndex() ) {
                     // Add indexes
                     for ( String s : ALTER_TABLE_ADD_INDEX_STATEMENTS ) {
                         statement.executeUpdate( s );
@@ -266,14 +253,14 @@ public class UniqueConstraintTest {
 
                 try {
                     statement.executeUpdate( "INSERT INTO constraint_test VALUES (1, 1, 1, 1), (2, 2, 2, 2)" );
-                    try {
-                        statement.executeUpdate( "INSERT INTO constraint_test SELECT * FROM constraint_test" );
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Insert violates unique constraint" ) ) {
-                            throw new RuntimeException( "Unexpected exception", e );
-                        }
-                    }
+
+                    Assertions.assertThrows(
+                            PrismInterfaceServiceException.class,
+                            () -> statement.executeUpdate( "INSERT INTO constraint_test SELECT * FROM constraint_test" ),
+                            "Insert violates unique constraint"
+                    );
+                    connection.rollback();
+
                     TestHelper.checkResultSet(
                             statement.executeQuery( "SELECT * FROM constraint_test ORDER BY ctid" ),
                             ImmutableList.of(
@@ -289,14 +276,15 @@ public class UniqueConstraintTest {
     }
 
 
-    @Test
-    public void insertSelectInternalConflictTest() throws SQLException {
+    @ParameterizedTest(name = "{index}. Create Index: {0}")
+    @ValueSource(booleans = { false, true })
+    public void insertSelectInternalConflictTest( boolean useIndex ) throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
                 // Create schema
                 statement.executeUpdate( CREATE_TABLE_CONSTRAINT_STATEMENTS );
-                if ( createIndexes ) {
+                if ( useIndex && helper.storeSupportsIndex() ) {
                     // Add indexes
                     for ( String s : ALTER_TABLE_ADD_INDEX_STATEMENTS ) {
                         statement.executeUpdate( s );
@@ -305,14 +293,13 @@ public class UniqueConstraintTest {
 
                 try {
                     statement.executeUpdate( "INSERT INTO constraint_test VALUES (1, 1, 1, 5), (2, 2, 2, 5)" );
-                    try {
-                        statement.executeUpdate( "INSERT INTO constraint_test SELECT c AS ctid, a + 2 AS a, b, c FROM constraint_test" );
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Insert violates unique constraint" ) ) {
-                            throw new RuntimeException( "Unexpected exception", e );
-                        }
-                    }
+
+                    Assertions.assertThrows(
+                            PrismInterfaceServiceException.class,
+                            () -> statement.executeUpdate( "INSERT INTO constraint_test SELECT c AS ctid, a + 2 AS a, b, c FROM constraint_test" ),
+                            "Insert violates unique constraint"
+                    );
+                    connection.rollback();
                     TestHelper.checkResultSet(
                             statement.executeQuery( "SELECT * FROM constraint_test ORDER BY ctid" ),
                             ImmutableList.of(
@@ -328,14 +315,15 @@ public class UniqueConstraintTest {
     }
 
 
-    @Test
-    public void batchInsertTest() throws SQLException {
-        try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
+    @ParameterizedTest(name = "{index}. Create Index: {0}")
+    @ValueSource(booleans = { false, true })
+    public void batchInsertTest( boolean useIndex ) throws SQLException {
+        try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( false ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
                 // Create schema
                 statement.executeUpdate( CREATE_TABLE_CONSTRAINT_STATEMENTS );
-                if ( createIndexes ) {
+                if ( useIndex && helper.storeSupportsIndex() ) {
                     // Add indexes
                     for ( String s : ALTER_TABLE_ADD_INDEX_STATEMENTS ) {
                         statement.executeUpdate( s );
@@ -356,14 +344,12 @@ public class UniqueConstraintTest {
                     preparedStatement.setInt( 3, 1 );
                     preparedStatement.setInt( 4, 1 );
                     preparedStatement.addBatch();
-                    try {
-                        preparedStatement.executeBatch();
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Insert violates unique constraint" ) ) {
-                            throw new RuntimeException( "Unexpected exception", e );
-                        }
-                    }
+                    Assertions.assertThrows(
+                            PrismInterfaceServiceException.class,
+                            preparedStatement::executeBatch,
+                            "Insert violates unique constraint"
+                    );
+                    connection.rollback();
 
                     // This should work
                     for ( int i = 1; i < 5; i++ ) {
@@ -374,6 +360,7 @@ public class UniqueConstraintTest {
                         preparedStatement.addBatch();
                     }
                     preparedStatement.executeBatch();
+                    connection.commit();
 
                     // This should not work
                     for ( int i = 8; i > 3; i-- ) {
@@ -385,11 +372,13 @@ public class UniqueConstraintTest {
                     }
                     try {
                         preparedStatement.executeBatch();
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Insert violates unique constraint" ) ) {
+                        connection.commit();
+                        Assertions.fail( "Expected ConstraintViolationException was not thrown" );
+                    } catch ( PrismInterfaceServiceException e ) {
+                        if ( !e.getMessage().contains( "Insert violates unique constraint" ) ) {
                             throw new RuntimeException( "Unexpected exception", e );
                         }
+                        connection.rollback();
                     }
                     TestHelper.checkResultSet(
                             statement.executeQuery( "SELECT * FROM constraint_test ORDER BY ctid" ),
@@ -408,14 +397,15 @@ public class UniqueConstraintTest {
     }
 
 
-    @Test
-    public void batchUpdateTest() throws SQLException {
+    @ParameterizedTest(name = "{index}. Create Index: {0}")
+    @ValueSource(booleans = { false, true })
+    public void batchUpdateTest( boolean useIndex ) throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
                 // Create schema
                 statement.executeUpdate( CREATE_TABLE_CONSTRAINT_STATEMENTS );
-                if ( createIndexes ) {
+                if ( useIndex && helper.storeSupportsIndex() ) {
                     // Add indexes
                     for ( String s : ALTER_TABLE_ADD_INDEX_STATEMENTS ) {
                         statement.executeUpdate( s );
@@ -423,30 +413,38 @@ public class UniqueConstraintTest {
                 }
 
                 try {
-                    PreparedStatement preparedStatement = connection.prepareStatement( "UPDATE constraint_test SET a = ? WHERE ctid = ?" );
+                    statement.executeUpdate( "INSERT INTO constraint_test VALUES (1, 1, 1, 1), (2, 2, 2, 2), (3, 3, 3, 3),(4, 4, 4, 4)" );
+
+                    PreparedStatement preparedStatement = connection.prepareStatement( "UPDATE constraint_test SET a = ?, b = ? WHERE ctid = ?" );
 
                     // This should not work
                     preparedStatement.setInt( 1, 22 );
-                    preparedStatement.setInt( 2, 1 );
+                    preparedStatement.setInt( 2, 22 );
+                    preparedStatement.setInt( 3, 1 );
                     preparedStatement.addBatch();
                     preparedStatement.setInt( 1, 22 );
-                    preparedStatement.setInt( 2, 2 );
+                    preparedStatement.setInt( 2, 22 );
+                    preparedStatement.setInt( 3, 2 );
                     preparedStatement.addBatch();
                     try {
                         preparedStatement.executeBatch();
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Insert violates unique constraint" ) ) {
+                        connection.commit();
+                        Assertions.fail( "Expected ConstraintViolationException was not thrown" );
+                    } catch ( Exception e ) {
+                        if ( !e.getMessage().contains( "Update violates unique constraint" ) ) {
                             throw new RuntimeException( "Unexpected exception", e );
                         }
+                        connection.rollback();
                     }
 
                     // This should work
                     preparedStatement.setInt( 1, 99 );
-                    preparedStatement.setInt( 2, 1 );
+                    preparedStatement.setInt( 2, 99 );
+                    preparedStatement.setInt( 3, 1 );
                     preparedStatement.addBatch();
-                    preparedStatement.setInt( 1, 55 );
-                    preparedStatement.setInt( 2, 3 );
+                    preparedStatement.setInt( 1, 99 );
+                    preparedStatement.setInt( 2, 55 );
+                    preparedStatement.setInt( 3, 3 );
                     preparedStatement.addBatch();
 
                     preparedStatement.executeBatch();
@@ -454,28 +452,33 @@ public class UniqueConstraintTest {
                     TestHelper.checkResultSet(
                             statement.executeQuery( "SELECT * FROM constraint_test ORDER BY ctid" ),
                             ImmutableList.of(
-                                    new Object[]{ 1, 1, 1, 1 },
+                                    new Object[]{ 1, 99, 99, 1 },
                                     new Object[]{ 2, 2, 2, 2 },
-                                    new Object[]{ 3, 3, 3, 3 },
+                                    new Object[]{ 3, 99, 55, 3 },
                                     new Object[]{ 4, 4, 4, 4 }
                             )
                     );
 
                     // This should not work
-                    preparedStatement.setInt( 1, 86 );
-                    preparedStatement.setInt( 2, 2 );
+                    preparedStatement.setInt( 1, 99 );
+                    preparedStatement.setInt( 2, 99 );
+                    preparedStatement.setInt( 3, 2 );
                     preparedStatement.addBatch();
                     preparedStatement.setInt( 1, 99 );
-                    preparedStatement.setInt( 2, 4 );
+                    preparedStatement.setInt( 2, 91 );
+                    preparedStatement.setInt( 3, 4 );
                     preparedStatement.addBatch();
                     try {
                         preparedStatement.executeBatch();
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Insert violates unique constraint" ) ) {
+                        Assertions.fail( "Expected ConstraintViolationException was not thrown" );
+                    } catch ( PrismInterfaceServiceException e ) {
+                        if ( !e.getMessage().contains( "Update violates unique constraint" ) ) {
                             throw new RuntimeException( "Unexpected exception", e );
                         }
+                        connection.rollback();
                     }
+                } catch ( Exception e ) {
+                    log.error( "Exception", e );
                 } finally {
                     statement.executeUpdate( "DROP TABLE constraint_test" );
                 }
@@ -484,14 +487,16 @@ public class UniqueConstraintTest {
     }
 
 
-    @Test
-    public void updateNoConflictTest() throws SQLException {
+    @ParameterizedTest(name = "{index}. Create Index: {0}")
+    @ValueSource(booleans = { false, true })
+    @Tag("cottontailExcluded")
+    public void updateNoConflictTest( boolean useIndex ) throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
                 // Create schema
                 statement.executeUpdate( CREATE_TABLE_CONSTRAINT_STATEMENTS );
-                if ( createIndexes ) {
+                if ( useIndex && helper.storeSupportsIndex() ) {
                     // Add indexes
                     for ( String s : ALTER_TABLE_ADD_INDEX_STATEMENTS ) {
                         statement.executeUpdate( s );
@@ -500,19 +505,42 @@ public class UniqueConstraintTest {
 
                 try {
                     statement.executeUpdate( "INSERT INTO constraint_test VALUES (1, 1, 1, 1), (2, 2, 2, 2), (3, 3, 3, 3), (4, 4, 4, 4)" );
+
                     statement.executeUpdate( "UPDATE constraint_test SET a = ctid" );
-                    statement.executeUpdate( "UPDATE constraint_test SET a = 2 * ctid, b = 2 * ctid" );
+
+                    if ( !useIndex ) {
+                        // this leads to conflicts for index true if adapters check the index on a row by row basis, e.g. PostgreSQL
+                        statement.executeUpdate( "UPDATE constraint_test SET a = 2 * ctid, b = 2 * ctid" );
+
+                    }
+
                     statement.executeUpdate( "UPDATE constraint_test SET c = 1" );
+
                     statement.executeUpdate( "UPDATE constraint_test SET c = 2 WHERE ctid = 3" );
-                    TestHelper.checkResultSet(
-                            statement.executeQuery( "SELECT * FROM constraint_test ORDER BY ctid" ),
-                            ImmutableList.of(
-                                    new Object[]{ 1, 2, 2, 1 },
-                                    new Object[]{ 2, 4, 4, 1 },
-                                    new Object[]{ 3, 6, 6, 2 },
-                                    new Object[]{ 4, 8, 8, 1 }
-                            )
-                    );
+
+                    if ( !useIndex ) {
+                        TestHelper.checkResultSet(
+                                statement.executeQuery( "SELECT * FROM constraint_test ORDER BY ctid" ),
+                                ImmutableList.of(
+                                        new Object[]{ 1, 2, 2, 1 },
+                                        new Object[]{ 2, 4, 4, 1 },
+                                        new Object[]{ 3, 6, 6, 2 },
+                                        new Object[]{ 4, 8, 8, 1 }
+                                )
+                        );
+                    } else {
+                        TestHelper.checkResultSet(
+                                statement.executeQuery( "SELECT * FROM constraint_test ORDER BY ctid" ),
+                                ImmutableList.of(
+                                        new Object[]{ 1, 1, 1, 1 },
+                                        new Object[]{ 2, 2, 2, 1 },
+                                        new Object[]{ 3, 3, 3, 2 },
+                                        new Object[]{ 4, 4, 4, 1 }
+                                )
+                        );
+                    }
+
+
                 } finally {
                     statement.executeUpdate( "DROP TABLE constraint_test" );
                 }
@@ -521,14 +549,15 @@ public class UniqueConstraintTest {
     }
 
 
-    @Test
-    public void updateConflictTest() throws SQLException {
+    @ParameterizedTest(name = "{index}. Create Index: {0}")
+    @ValueSource(booleans = { false, true })
+    public void updateConflictTest( boolean useIndex ) throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
                 // Create schema
                 statement.executeUpdate( CREATE_TABLE_CONSTRAINT_STATEMENTS );
-                if ( createIndexes ) {
+                if ( useIndex && helper.storeSupportsIndex() ) {
                     // Add indexes
                     for ( String s : ALTER_TABLE_ADD_INDEX_STATEMENTS ) {
                         statement.executeUpdate( s );
@@ -537,30 +566,13 @@ public class UniqueConstraintTest {
 
                 try {
                     statement.executeUpdate( "INSERT INTO constraint_test VALUES (1, 1, 1, 1), (2, 2, 2, 2), (3, 3, 3, 3), (4, 4, 4, 4)" );
-                    try {
-                        statement.executeUpdate( "UPDATE constraint_test SET ctid = 1" );
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Update violates unique constraint" ) ) {
-                            throw new RuntimeException( "Unexpected exception", e );
-                        }
-                    }
-                    try {
-                        statement.executeUpdate( "UPDATE constraint_test SET a = 42, b = 73" );
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Update violates unique constraint" ) ) {
-                            throw new RuntimeException( "Unexpected exception", e );
-                        }
-                    }
-                    try {
-                        statement.executeUpdate( "UPDATE constraint_test SET ctid = 4 WHERE a = 3" );
-                        Assert.fail( "Expected ConstraintViolationException was not thrown" );
-                    } catch ( AvaticaSqlException e ) {
-                        if ( !e.getErrorMessage().contains( "Remote driver error: Update violates unique constraint" ) ) {
-                            throw new RuntimeException( "Unexpected exception", e );
-                        }
-                    }
+
+                    Assertions.assertThrows( PrismInterfaceServiceException.class, () -> statement.executeUpdate( "UPDATE constraint_test SET ctid = 1" ), "Update violates unique constraint" );
+                    connection.rollback();
+                    Assertions.assertThrows( PrismInterfaceServiceException.class, () -> statement.executeUpdate( "UPDATE constraint_test SET a = 42, b = 73" ), "Update violates unique constraint" );
+                    connection.rollback();
+                    Assertions.assertThrows( PrismInterfaceServiceException.class, () -> statement.executeUpdate( "UPDATE constraint_test SET ctid = 4 WHERE a = 3" ), "Update violates unique constraint" );
+                    connection.rollback();
                     TestHelper.checkResultSet(
                             statement.executeQuery( "SELECT * FROM constraint_test ORDER BY ctid" ),
                             ImmutableList.of(

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,6 +38,8 @@ import com.google.common.collect.ImmutableList;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import org.jetbrains.annotations.NotNull;
 
 
 /**
@@ -62,7 +64,7 @@ public class Contexts {
 
     /**
      * Returns a context that wraps an object.
-     *
+     * <p>
      * A call to {@code unwrap(C)} will return {@code target} if it is an instance of {@code C}.
      */
     public static Context of( Object o ) {
@@ -86,9 +88,9 @@ public class Contexts {
 
     /**
      * Returns a context that wraps a list of contexts.
-     *
+     * <p>
      * A call to {@code unwrap(C)} will return the first object that is an instance of {@code C}.
-     *
+     * <p>
      * If any of the contexts is a {@link Context}, recursively looks in that object. Thus this method can be used to chain contexts.
      */
     public static Context chain( Context... contexts ) {
@@ -102,14 +104,11 @@ public class Contexts {
         for ( Context context : contexts ) {
             build( list, context );
         }
-        switch ( list.size() ) {
-            case 0:
-                return empty();
-            case 1:
-                return list.get( 0 );
-            default:
-                return new ChainContext( ImmutableList.copyOf( list ) );
-        }
+        return switch ( list.size() ) {
+            case 0 -> empty();
+            case 1 -> list.get( 0 );
+            default -> new ChainContext( ImmutableList.copyOf( list ) );
+        };
     }
 
 
@@ -120,8 +119,7 @@ public class Contexts {
         if ( context == EMPTY_CONTEXT || list.contains( context ) ) {
             return;
         }
-        if ( context instanceof ChainContext ) {
-            ChainContext chainContext = (ChainContext) context;
+        if ( context instanceof ChainContext chainContext ) {
             for ( Context child : chainContext.contexts ) {
                 build( list, child );
             }
@@ -143,14 +141,6 @@ public class Contexts {
             this.target = Objects.requireNonNull( target );
         }
 
-
-        @Override
-        public <T> T unwrap( Class<T> clazz ) {
-            if ( clazz.isInstance( target ) ) {
-                return clazz.cast( target );
-            }
-            return null;
-        }
     }
 
 
@@ -160,9 +150,10 @@ public class Contexts {
     public static class EmptyContext implements Context {
 
         @Override
-        public <T> T unwrap( Class<T> clazz ) {
-            return null;
+        public @NotNull <T> Optional<T> unwrap( Class<T> clazz ) {
+            return Optional.empty();
         }
+
     }
 
 
@@ -181,16 +172,6 @@ public class Contexts {
             }
         }
 
-
-        @Override
-        public <T> T unwrap( Class<T> clazz ) {
-            for ( Context context : contexts ) {
-                final T t = context.unwrap( clazz );
-                if ( t != null ) {
-                    return t;
-                }
-            }
-            return null;
-        }
     }
+
 }

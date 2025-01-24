@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,12 +36,14 @@ package org.polypheny.db.rex;
 
 import java.util.AbstractList;
 import java.util.concurrent.CopyOnWriteArrayList;
-import org.polypheny.db.rel.type.RelDataType;
+import lombok.Getter;
+import org.polypheny.db.algebra.type.AlgDataType;
 
 
 /**
- * Abstract base class for {@link RexInputRef} and {@link RexLocalRef}.
+ * Abstract base class for {@link RexIndexRef} and {@link RexLocalRef}.
  */
+@Getter
 public abstract class RexSlot extends RexVariable {
 
     protected final int index;
@@ -53,15 +55,10 @@ public abstract class RexSlot extends RexVariable {
      * @param index Index of the field in the underlying rowtype
      * @param type Type of the column
      */
-    protected RexSlot( String name, int index, RelDataType type ) {
+    protected RexSlot( String name, int index, AlgDataType type ) {
         super( name, type );
         assert index >= 0;
         this.index = index;
-    }
-
-
-    public int getIndex() {
-        return index;
     }
 
 
@@ -69,19 +66,19 @@ public abstract class RexSlot extends RexVariable {
      * Thread-safe list that populates itself if you make a reference beyond the end of the list. Useful if you are using the same entries repeatedly.
      * Once populated, accesses are very efficient.
      */
-    protected static class SelfPopulatingList extends CopyOnWriteArrayList<String> {
+    public static class SelfPopulatingList extends CopyOnWriteArrayList<String> {
 
         private final String prefix;
 
 
-        SelfPopulatingList( final String prefix, final int initialSize ) {
+        public SelfPopulatingList( final String prefix, final int initialSize ) {
             super( fromTo( prefix, 0, initialSize ) );
             this.prefix = prefix;
         }
 
 
         private static AbstractList<String> fromTo( final String prefix, final int start, final int end ) {
-            return new AbstractList<String>() {
+            return new AbstractList<>() {
                 @Override
                 public String get( int index ) {
                     return prefix + (index + start);
@@ -115,6 +112,8 @@ public abstract class RexSlot extends RexVariable {
                 }
             }
         }
+
     }
+
 }
 
