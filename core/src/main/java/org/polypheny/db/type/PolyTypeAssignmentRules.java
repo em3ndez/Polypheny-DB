@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,6 +47,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
+import org.polypheny.db.catalog.exceptions.GenericRuntimeException;
 
 
 /**
@@ -70,17 +71,7 @@ public class PolyTypeAssignmentRules {
 
         final Set<PolyType> rule = new HashSet<>();
 
-        // IntervalYearMonth is assignable from...
-        for ( PolyType interval : PolyType.YEAR_INTERVAL_TYPES ) {
-            rules.add( interval, PolyType.YEAR_INTERVAL_TYPES );
-        }
-        for ( PolyType interval : PolyType.DAY_INTERVAL_TYPES ) {
-            rules.add( interval, PolyType.DAY_INTERVAL_TYPES );
-        }
-        for ( PolyType interval : PolyType.DAY_INTERVAL_TYPES ) {
-            final Set<PolyType> dayIntervalTypes = PolyType.DAY_INTERVAL_TYPES;
-            rules.add( interval, dayIntervalTypes );
-        }
+        rules.add( PolyType.INTERVAL, Set.of( PolyType.INTERVAL ) );
 
         // MULTISET is assignable from...
         rules.add( PolyType.MULTISET, EnumSet.of( PolyType.MULTISET ) );
@@ -159,6 +150,14 @@ public class PolyTypeAssignmentRules {
         rule.add( PolyType.BINARY );
         rules.add( PolyType.VARBINARY, rule );
 
+        // TEXT is assignable from...
+        rule.clear();
+        rule.add( PolyType.TEXT );
+        rule.add( PolyType.CHAR );
+        rule.add( PolyType.VARCHAR );
+        rule.add( PolyType.DOCUMENT );
+        rules.add( PolyType.TEXT, rule );
+
         // CHAR is assignable from...
         rules.add( PolyType.CHAR, EnumSet.of( PolyType.CHAR ) );
 
@@ -166,6 +165,7 @@ public class PolyTypeAssignmentRules {
         rule.clear();
         rule.add( PolyType.CHAR );
         rule.add( PolyType.VARCHAR );
+        rule.add( PolyType.TEXT );
         rules.add( PolyType.VARCHAR, rule );
 
         // BOOLEAN is assignable from...
@@ -181,7 +181,7 @@ public class PolyTypeAssignmentRules {
         rule.clear();
         rule.add( PolyType.IMAGE );
         rule.add( PolyType.VIDEO );
-        rule.add( PolyType.SOUND );
+        rule.add( PolyType.AUDIO );
         rules.add( PolyType.FILE, rule );
 
         // DATE is assignable from...
@@ -196,14 +196,16 @@ public class PolyTypeAssignmentRules {
         rule.add( PolyType.TIMESTAMP );
         rules.add( PolyType.TIME, rule );
 
-        // TIME WITH LOCAL TIME ZONE is assignable from...
-        rules.add( PolyType.TIME_WITH_LOCAL_TIME_ZONE, EnumSet.of( PolyType.TIME_WITH_LOCAL_TIME_ZONE ) );
+        // DOCUMENT is assignable from...
+        rule.clear();
+        rule.add( PolyType.VARCHAR );
+        rule.add( PolyType.TEXT );
+        rule.add( PolyType.ANY );
+        rule.add( PolyType.DOCUMENT );
+        rules.add( PolyType.DOCUMENT, rule );
 
         // TIMESTAMP is assignable from ...
         rules.add( PolyType.TIMESTAMP, EnumSet.of( PolyType.TIMESTAMP ) );
-
-        // TIMESTAMP WITH LOCAL TIME ZONE is assignable from...
-        rules.add( PolyType.TIMESTAMP_WITH_LOCAL_TIME_ZONE, EnumSet.of( PolyType.TIMESTAMP_WITH_LOCAL_TIME_ZONE ) );
 
         // GEOMETRY is assignable from ...
         rules.add( PolyType.GEOMETRY, EnumSet.of( PolyType.GEOMETRY ) );
@@ -282,7 +284,17 @@ public class PolyTypeAssignmentRules {
                         .add( PolyType.DATE )
                         .add( PolyType.TIME )
                         .add( PolyType.TIMESTAMP )
+                        .add( PolyType.DOCUMENT )
+                        .add( PolyType.TEXT )
+                        .add( PolyType.JSON )
                         .addAll( PolyType.INTERVAL_TYPES )
+                        .build() );
+
+        coerceRules.add(
+                PolyType.TEXT,
+                coerceRules.copyValues( PolyType.TEXT )
+                        .add( PolyType.VARCHAR )
+                        .add( PolyType.JSON )
                         .build() );
 
         // CHAR is castable from BOOLEAN, DATE, TIME, TIMESTAMP and numeric types
@@ -312,7 +324,6 @@ public class PolyTypeAssignmentRules {
                 coerceRules.copyValues( PolyType.DATE )
                         .add( PolyType.DATE )
                         .add( PolyType.TIMESTAMP )
-                        .add( PolyType.TIMESTAMP_WITH_LOCAL_TIME_ZONE )
                         .add( PolyType.CHAR )
                         .add( PolyType.VARCHAR )
                         .build() );
@@ -322,21 +333,7 @@ public class PolyTypeAssignmentRules {
                 PolyType.TIME,
                 coerceRules.copyValues( PolyType.TIME )
                         .add( PolyType.TIME )
-                        .add( PolyType.TIME_WITH_LOCAL_TIME_ZONE )
                         .add( PolyType.TIMESTAMP )
-                        .add( PolyType.TIMESTAMP_WITH_LOCAL_TIME_ZONE )
-                        .add( PolyType.CHAR )
-                        .add( PolyType.VARCHAR )
-                        .build() );
-
-        // TIME WITH LOCAL TIME ZONE is castable from...
-        coerceRules.add(
-                PolyType.TIME_WITH_LOCAL_TIME_ZONE,
-                coerceRules.copyValues( PolyType.TIME_WITH_LOCAL_TIME_ZONE )
-                        .add( PolyType.TIME )
-                        .add( PolyType.TIME_WITH_LOCAL_TIME_ZONE )
-                        .add( PolyType.TIMESTAMP )
-                        .add( PolyType.TIMESTAMP_WITH_LOCAL_TIME_ZONE )
                         .add( PolyType.CHAR )
                         .add( PolyType.VARCHAR )
                         .build() );
@@ -346,23 +343,8 @@ public class PolyTypeAssignmentRules {
                 PolyType.TIMESTAMP,
                 coerceRules.copyValues( PolyType.TIMESTAMP )
                         .add( PolyType.TIMESTAMP )
-                        .add( PolyType.TIMESTAMP_WITH_LOCAL_TIME_ZONE )
                         .add( PolyType.DATE )
                         .add( PolyType.TIME )
-                        .add( PolyType.TIME_WITH_LOCAL_TIME_ZONE )
-                        .add( PolyType.CHAR )
-                        .add( PolyType.VARCHAR )
-                        .build() );
-
-        // TIMESTAMP WITH LOCAL TIME ZONE is castable from...
-        coerceRules.add(
-                PolyType.TIMESTAMP_WITH_LOCAL_TIME_ZONE,
-                coerceRules.copyValues( PolyType.TIMESTAMP_WITH_LOCAL_TIME_ZONE )
-                        .add( PolyType.TIMESTAMP )
-                        .add( PolyType.TIMESTAMP_WITH_LOCAL_TIME_ZONE )
-                        .add( PolyType.DATE )
-                        .add( PolyType.TIME )
-                        .add( PolyType.TIME_WITH_LOCAL_TIME_ZONE )
                         .add( PolyType.CHAR )
                         .add( PolyType.VARCHAR )
                         .build() );
@@ -425,7 +407,7 @@ public class PolyTypeAssignmentRules {
          */
         Builder() {
             this.map = new HashMap<>();
-            this.sets = CacheBuilder.newBuilder().build( CacheLoader.from( set -> Sets.immutableEnumSet( set ) ) );
+            this.sets = CacheBuilder.newBuilder().build( CacheLoader.from( Sets::immutableEnumSet ) );
         }
 
 
@@ -442,7 +424,7 @@ public class PolyTypeAssignmentRules {
             try {
                 map.put( fromType, sets.get( toTypes ) );
             } catch ( ExecutionException e ) {
-                throw new RuntimeException( "populating SqlTypeAssignmentRules", e );
+                throw new GenericRuntimeException( "populating SqlTypeAssignmentRules", e );
             }
         }
 

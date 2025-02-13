@@ -1,23 +1,24 @@
 group "org.polypheny"
 
-version = versionMajor + "." + versionMinor + versionQualifier
-
 
 dependencies {
+    api project(":config")
 
-    implementation group: "com.sparkjava", name: "spark-core", version: spark_core_version
+    implementation(group: "io.javalin", name: "javalin", version: javalin_version) {
+        exclude(group: "org.slf4j")
+    } // Apache 2.0
 
     implementation group: "com.google.code.gson", name: "gson", version: gson_version  // Apache 2.0
-
-    implementation group: "org.apache.commons", name: "commons-text", version: commons_text_version  // Apache 2.0
     implementation group: "org.apache.commons", name: "commons-collections4", version: commons_collections_version  // Apache 2.0
-    
+    implementation group: "com.google.guava", name: "guava", version: guava_version // Apache 2.0
+    implementation group: "com.fasterxml.jackson.core", name: "jackson-core", version: jackson_core_version // Apache 2.0
+    implementation group: "com.fasterxml.jackson.core", name: "jackson-annotations", version: jackson_annotations_version // Apache 2.0
+    implementation group: "com.fasterxml.jackson.core", name: "jackson-databind", version: jackson_databind_version
+    api group: "org.apache.commons", name: "commons-lang3", version: commons_lang3_version  // Apache 2.0
+
 
     // --- Test Compile ---
     testImplementation project(path: ":core", configuration: "tests")
-
-    testImplementation group: "junit", name: "junit", version: junit_version
-
     testImplementation group: "com.github.oshi", name: "oshi-core", version: oshi_core_version  // MIT
 }
 
@@ -26,7 +27,6 @@ sourceSets {
     main {
         java {
             srcDirs = ["src/main/java"]
-            outputDir = file(project.buildDir.absolutePath + "/classes")
         }
         resources {
             srcDirs = ["src/main/resources"]
@@ -36,7 +36,7 @@ sourceSets {
     test {
         java {
             srcDirs = ["src/test/java"]
-            outputDir = file(project.buildDir.absolutePath + "/test-classes")
+            destinationDirectory.set(file(project.buildDir.absolutePath + "/test-classes"))
         }
         resources {
             srcDirs = ["src/test/resources"]
@@ -45,6 +45,13 @@ sourceSets {
     }
 }
 
+compileJava {
+    dependsOn(":config:processResources");
+}
+
+delombok {
+    dependsOn(":config:processResources");
+}
 
 /**
  * JARs

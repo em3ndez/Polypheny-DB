@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2025 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,55 +17,44 @@
 package org.polypheny.db.webui;
 
 
-import au.com.bytecode.opencsv.CSVReader;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
 import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
-import com.google.gson.JsonSerializer;
-import com.google.gson.JsonSyntaxException;
 import com.j256.simplemagic.ContentInfo;
 import com.j256.simplemagic.ContentInfoUtil;
-import java.io.BufferedInputStream;
+import io.javalin.http.Context;
+import io.javalin.http.HttpCode;
+import java.beans.PropertyChangeEvent;
+import java.beans.PropertyChangeListener;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.io.OutputStreamWriter;
-import java.io.PushbackInputStream;
 import java.io.RandomAccessFile;
-import java.io.Reader;
 import java.math.BigDecimal;
-import java.net.URL;
-import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.sql.Array;
-import java.sql.Blob;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.UUID;
@@ -75,95 +64,94 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 import javax.servlet.MultipartConfigElement;
 import javax.servlet.ServletException;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.Part;
-import kong.unirest.HttpResponse;
-import kong.unirest.Unirest;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.calcite.avatica.ColumnMetaData;
-import org.apache.calcite.avatica.Meta.StatementType;
-import org.apache.calcite.avatica.MetaImpl;
-import org.apache.calcite.avatica.remote.AvaticaRuntimeException;
-import org.apache.calcite.linq4j.Enumerable;
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.lang.ArrayUtils;
-import org.apache.commons.lang.StringEscapeUtils;
-import org.apache.commons.lang3.time.StopWatch;
+import org.apache.commons.io.IOUtils;
 import org.eclipse.jetty.websocket.api.Session;
+import org.polypheny.db.adapter.AbstractAdapterSetting;
+import org.polypheny.db.adapter.AbstractAdapterSettingDirectory;
 import org.polypheny.db.adapter.Adapter;
-import org.polypheny.db.adapter.Adapter.AbstractAdapterSetting;
-import org.polypheny.db.adapter.Adapter.AbstractAdapterSettingDirectory;
-import org.polypheny.db.adapter.Adapter.AdapterSettingDeserializer;
 import org.polypheny.db.adapter.AdapterManager;
 import org.polypheny.db.adapter.AdapterManager.AdapterInformation;
+import org.polypheny.db.adapter.ConnectionMethod;
 import org.polypheny.db.adapter.DataSource;
 import org.polypheny.db.adapter.DataSource.ExportedColumn;
 import org.polypheny.db.adapter.DataStore;
 import org.polypheny.db.adapter.DataStore.FunctionalIndexInfo;
 import org.polypheny.db.adapter.index.IndexManager;
+import org.polypheny.db.adapter.java.AdapterTemplate;
+import org.polypheny.db.algebra.AlgNode;
+import org.polypheny.db.algebra.polyalg.PolyAlgRegistry;
 import org.polypheny.db.catalog.Catalog;
-import org.polypheny.db.catalog.Catalog.ConstraintType;
-import org.polypheny.db.catalog.Catalog.ForeignKeyOption;
-import org.polypheny.db.catalog.Catalog.PartitionType;
-import org.polypheny.db.catalog.Catalog.PlacementType;
-import org.polypheny.db.catalog.Catalog.TableType;
-import org.polypheny.db.catalog.NameGenerator;
-import org.polypheny.db.catalog.entity.CatalogAdapter.AdapterType;
-import org.polypheny.db.catalog.entity.CatalogColumn;
-import org.polypheny.db.catalog.entity.CatalogColumnPlacement;
-import org.polypheny.db.catalog.entity.CatalogConstraint;
-import org.polypheny.db.catalog.entity.CatalogForeignKey;
-import org.polypheny.db.catalog.entity.CatalogIndex;
-import org.polypheny.db.catalog.entity.CatalogPrimaryKey;
-import org.polypheny.db.catalog.entity.CatalogSchema;
-import org.polypheny.db.catalog.entity.CatalogTable;
-import org.polypheny.db.catalog.entity.CatalogView;
-import org.polypheny.db.catalog.exceptions.GenericCatalogException;
-import org.polypheny.db.catalog.exceptions.TableAlreadyExistsException;
-import org.polypheny.db.catalog.exceptions.UnknownColumnException;
-import org.polypheny.db.catalog.exceptions.UnknownDatabaseException;
-import org.polypheny.db.catalog.exceptions.UnknownPartitionTypeException;
-import org.polypheny.db.catalog.exceptions.UnknownQueryInterfaceException;
-import org.polypheny.db.catalog.exceptions.UnknownSchemaException;
-import org.polypheny.db.catalog.exceptions.UnknownTableException;
-import org.polypheny.db.catalog.exceptions.UnknownUserException;
-import org.polypheny.db.config.Config;
-import org.polypheny.db.config.Config.ConfigListener;
+import org.polypheny.db.catalog.entity.LogicalAdapter;
+import org.polypheny.db.catalog.entity.LogicalAdapter.AdapterType;
+import org.polypheny.db.catalog.entity.LogicalConstraint;
+import org.polypheny.db.catalog.entity.MaterializedCriteria;
+import org.polypheny.db.catalog.entity.MaterializedCriteria.CriteriaType;
+import org.polypheny.db.catalog.entity.allocation.AllocationColumn;
+import org.polypheny.db.catalog.entity.allocation.AllocationEntity;
+import org.polypheny.db.catalog.entity.logical.LogicalColumn;
+import org.polypheny.db.catalog.entity.logical.LogicalEntity;
+import org.polypheny.db.catalog.entity.logical.LogicalForeignKey;
+import org.polypheny.db.catalog.entity.logical.LogicalIndex;
+import org.polypheny.db.catalog.entity.logical.LogicalMaterializedView;
+import org.polypheny.db.catalog.entity.logical.LogicalNamespace;
+import org.polypheny.db.catalog.entity.logical.LogicalPrimaryKey;
+import org.polypheny.db.catalog.entity.logical.LogicalTable;
+import org.polypheny.db.catalog.entity.logical.LogicalView;
+import org.polypheny.db.catalog.exceptions.GenericRuntimeException;
+import org.polypheny.db.catalog.logistic.ConstraintType;
+import org.polypheny.db.catalog.logistic.DataModel;
+import org.polypheny.db.catalog.logistic.EntityType;
+import org.polypheny.db.catalog.logistic.ForeignKeyOption;
+import org.polypheny.db.catalog.logistic.NameGenerator;
+import org.polypheny.db.catalog.logistic.PartitionType;
+import org.polypheny.db.catalog.snapshot.LogicalRelSnapshot;
+import org.polypheny.db.catalog.snapshot.Snapshot;
 import org.polypheny.db.config.RuntimeConfig;
-import org.polypheny.db.ddl.DdlManager;
+import org.polypheny.db.docker.AutoDocker;
+import org.polypheny.db.docker.DockerInstance;
 import org.polypheny.db.docker.DockerManager;
-import org.polypheny.db.exploreByExample.Explore;
-import org.polypheny.db.exploreByExample.ExploreManager;
+import org.polypheny.db.docker.DockerSetupHelper;
+import org.polypheny.db.docker.HandshakeManager;
+import org.polypheny.db.docker.exceptions.DockerUserException;
+import org.polypheny.db.docker.models.AutoDockerResult;
+import org.polypheny.db.docker.models.CreateDockerRequest;
+import org.polypheny.db.docker.models.CreateDockerResponse;
+import org.polypheny.db.docker.models.DockerSettings;
+import org.polypheny.db.docker.models.HandshakeInfo;
+import org.polypheny.db.docker.models.InstancesAndAutoDocker;
+import org.polypheny.db.docker.models.UpdateDockerRequest;
 import org.polypheny.db.iface.QueryInterface;
 import org.polypheny.db.iface.QueryInterfaceManager;
-import org.polypheny.db.iface.QueryInterfaceManager.QueryInterfaceInformation;
-import org.polypheny.db.iface.QueryInterfaceManager.QueryInterfaceInformationRequest;
-import org.polypheny.db.information.Information;
+import org.polypheny.db.iface.QueryInterfaceManager.QueryInterfaceCreateRequest;
+import org.polypheny.db.iface.QueryInterfaceManager.QueryInterfaceTemplate;
 import org.polypheny.db.information.InformationGroup;
 import org.polypheny.db.information.InformationManager;
 import org.polypheny.db.information.InformationObserver;
 import org.polypheny.db.information.InformationPage;
-import org.polypheny.db.information.InformationStacktrace;
 import org.polypheny.db.information.InformationText;
-import org.polypheny.db.jdbc.PolyphenyDbSignature;
+import org.polypheny.db.languages.LanguageManager;
+import org.polypheny.db.languages.NodeParseException;
+import org.polypheny.db.languages.QueryLanguage;
+import org.polypheny.db.monitoring.events.StatementEvent;
 import org.polypheny.db.partition.PartitionFunctionInfo;
 import org.polypheny.db.partition.PartitionFunctionInfo.PartitionFunctionInfoColumn;
 import org.polypheny.db.partition.PartitionManager;
 import org.polypheny.db.partition.PartitionManagerFactory;
-import org.polypheny.db.processing.SqlProcessor;
-import org.polypheny.db.rel.RelCollation;
-import org.polypheny.db.rel.RelCollations;
-import org.polypheny.db.rel.RelNode;
-import org.polypheny.db.rel.RelRoot;
-import org.polypheny.db.rel.core.Sort;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.sql.SqlKind;
-import org.polypheny.db.sql.SqlNode;
-import org.polypheny.db.statistic.StatisticsManager;
+import org.polypheny.db.partition.properties.PartitionProperty;
+import org.polypheny.db.plugins.PolyPluginManager;
+import org.polypheny.db.plugins.PolyPluginManager.PluginStatus;
+import org.polypheny.db.processing.ImplementationContext;
+import org.polypheny.db.processing.ImplementationContext.ExecutedContext;
+import org.polypheny.db.processing.QueryContext;
+import org.polypheny.db.security.SecurityManager;
 import org.polypheny.db.transaction.Statement;
 import org.polypheny.db.transaction.Transaction;
 import org.polypheny.db.transaction.Transaction.MultimediaFlavor;
@@ -171,68 +159,71 @@ import org.polypheny.db.transaction.TransactionException;
 import org.polypheny.db.transaction.TransactionManager;
 import org.polypheny.db.type.PolyType;
 import org.polypheny.db.type.PolyTypeFamily;
-import org.polypheny.db.util.DateTimeStringUtils;
+import org.polypheny.db.type.entity.PolyValue;
+import org.polypheny.db.type.entity.category.PolyBlob;
+import org.polypheny.db.type.entity.category.PolyNumber;
+import org.polypheny.db.util.BsonUtil;
 import org.polypheny.db.util.FileInputHandle;
-import org.polypheny.db.util.FileSystemManager;
-import org.polypheny.db.util.ImmutableIntList;
-import org.polypheny.db.util.LimitIterator;
 import org.polypheny.db.util.Pair;
-import org.polypheny.db.webui.SchemaToJsonMapper.JsonColumn;
-import org.polypheny.db.webui.SchemaToJsonMapper.JsonTable;
-import org.polypheny.db.webui.models.AdapterModel;
-import org.polypheny.db.webui.models.DbColumn;
+import org.polypheny.db.util.PolyphenyHomeDirManager;
+import org.polypheny.db.webui.auth.AuthCrud;
+import org.polypheny.db.webui.crud.CatalogCrud;
+import org.polypheny.db.webui.crud.LanguageCrud;
+import org.polypheny.db.webui.crud.LanguageCrud.TriFunction;
+import org.polypheny.db.webui.crud.StatisticCrud;
 import org.polypheny.db.webui.models.DbTable;
-import org.polypheny.db.webui.models.ExploreResult;
 import org.polypheny.db.webui.models.ForeignKey;
-import org.polypheny.db.webui.models.HubMeta;
-import org.polypheny.db.webui.models.HubMeta.TableMapping;
-import org.polypheny.db.webui.models.HubResult;
-import org.polypheny.db.webui.models.Index;
+import org.polypheny.db.webui.models.IndexAdapterModel;
+import org.polypheny.db.webui.models.IndexAdapterModel.IndexMethodModel;
+import org.polypheny.db.webui.models.IndexModel;
+import org.polypheny.db.webui.models.MaterializedInfos;
+import org.polypheny.db.webui.models.Namespace;
 import org.polypheny.db.webui.models.PartitionFunctionModel;
 import org.polypheny.db.webui.models.PartitionFunctionModel.FieldType;
 import org.polypheny.db.webui.models.PartitionFunctionModel.PartitionFunctionColumn;
-import org.polypheny.db.webui.models.Placement;
+import org.polypheny.db.webui.models.PathAccessRequest;
+import org.polypheny.db.webui.models.PlacementFieldsModel;
+import org.polypheny.db.webui.models.PlacementModel;
+import org.polypheny.db.webui.models.PlacementModel.RelationalStore;
 import org.polypheny.db.webui.models.QueryInterfaceModel;
-import org.polypheny.db.webui.models.Result;
-import org.polypheny.db.webui.models.ResultType;
-import org.polypheny.db.webui.models.Schema;
 import org.polypheny.db.webui.models.SidebarElement;
 import org.polypheny.db.webui.models.SortState;
-import org.polypheny.db.webui.models.Status;
 import org.polypheny.db.webui.models.TableConstraint;
 import org.polypheny.db.webui.models.Uml;
 import org.polypheny.db.webui.models.UnderlyingTables;
+import org.polypheny.db.webui.models.catalog.AdapterModel;
+import org.polypheny.db.webui.models.catalog.PolyTypeModel;
+import org.polypheny.db.webui.models.catalog.SnapshotModel;
+import org.polypheny.db.webui.models.catalog.UiColumnDefinition;
 import org.polypheny.db.webui.models.requests.BatchUpdateRequest;
 import org.polypheny.db.webui.models.requests.BatchUpdateRequest.Update;
-import org.polypheny.db.webui.models.requests.ClassifyAllData;
 import org.polypheny.db.webui.models.requests.ColumnRequest;
 import org.polypheny.db.webui.models.requests.ConstraintRequest;
 import org.polypheny.db.webui.models.requests.EditTableRequest;
-import org.polypheny.db.webui.models.requests.ExploreData;
-import org.polypheny.db.webui.models.requests.ExploreTables;
-import org.polypheny.db.webui.models.requests.HubRequest;
 import org.polypheny.db.webui.models.requests.PartitioningRequest;
 import org.polypheny.db.webui.models.requests.PartitioningRequest.ModifyPartitionRequest;
-import org.polypheny.db.webui.models.requests.QueryExplorationRequest;
-import org.polypheny.db.webui.models.requests.QueryRequest;
-import org.polypheny.db.webui.models.requests.RelAlgRequest;
-import org.polypheny.db.webui.models.requests.SchemaTreeRequest;
+import org.polypheny.db.webui.models.requests.PolyAlgRequest;
 import org.polypheny.db.webui.models.requests.UIRequest;
-import spark.Request;
-import spark.Response;
-import spark.utils.IOUtils;
+import org.polypheny.db.webui.models.results.RelationalResult;
+import org.polypheny.db.webui.models.results.RelationalResult.RelationalResultBuilder;
+import org.polypheny.db.webui.models.results.Result;
+import org.polypheny.db.webui.models.results.Result.ResultBuilder;
+import org.polypheny.db.webui.models.results.ResultType;
 
 
+@Getter
 @Slf4j
-public class Crud implements InformationObserver {
+public class Crud implements InformationObserver, PropertyChangeListener {
 
-    private final Gson gson = new Gson();
+    private static final Gson gson = new Gson();
+    public static final String ORIGIN = "Polypheny-UI";
     private final TransactionManager transactionManager;
-    private final String databaseName;
-    private final String userName;
-    private final StatisticsManager<?> statisticsManager = StatisticsManager.getInstance();
-    private boolean isActiveTracking = false;
-    private final Catalog catalog = Catalog.getInstance();
+
+    public final LanguageCrud languageCrud;
+    public final StatisticCrud statisticCrud;
+
+    public final CatalogCrud catalogCrud;
+    public final AuthCrud authCrud;
 
 
     /**
@@ -240,47 +231,39 @@ public class Crud implements InformationObserver {
      *
      * @param transactionManager The Polypheny-DB transaction manager
      */
-    Crud( final TransactionManager transactionManager, final String userName, final String databaseName ) {
+    Crud( final TransactionManager transactionManager ) {
         this.transactionManager = transactionManager;
-        this.databaseName = databaseName;
-        this.userName = userName;
-        registerStatisticObserver();
+        this.languageCrud = new LanguageCrud( this );
+        this.statisticCrud = new StatisticCrud( this );
+        this.catalogCrud = new CatalogCrud( this );
+        this.authCrud = new AuthCrud( this );
+
+        Catalog.afterInit( () -> Catalog.getInstance().addObserver( this ) );
     }
 
 
     /**
-     * Ensures that changes in the ConfigManger toggle the statistics correctly
+     * Closes analyzers and deletes temporary files.
      */
-    private void registerStatisticObserver() {
-        this.isActiveTracking = RuntimeConfig.ACTIVE_TRACKING.getBoolean() && RuntimeConfig.DYNAMIC_QUERYING.getBoolean();
-        ConfigListener observer = new ConfigListener() {
-            @Override
-            public void onConfigChange( Config c ) {
-                setConfig( c );
-            }
-
-
-            @Override
-            public void restart( Config c ) {
-                setConfig( c );
-            }
-
-
-            private void setConfig( Config c ) {
-                isActiveTracking = c.getBoolean() && RuntimeConfig.DYNAMIC_QUERYING.getBoolean();
-            }
-        };
-        RuntimeConfig.ACTIVE_TRACKING.addObserver( observer );
-        RuntimeConfig.DYNAMIC_QUERYING.addObserver( observer );
+    public static void cleanupOldSession( ConcurrentHashMap<String, Set<String>> sessionXIds, final String sessionId ) {
+        Set<String> xIds = sessionXIds.remove( sessionId );
+        if ( xIds == null || xIds.isEmpty() ) {
+            return;
+        }
+        for ( String xId : xIds ) {
+            InformationManager.close( xId );
+            TemporalFileManager.deleteFilesOfTransaction( xId );
+        }
     }
 
 
     /**
      * Returns the content of a table with a maximum of PAGESIZE elements.
      */
-    Result getTable( final UIRequest request ) {
+    RelationalResult getTable( final UIRequest request ) {
         Transaction transaction = getTransaction();
-        Result result;
+        RelationalResultBuilder<?, ?> resultBuilder;
+        QueryLanguage language = QueryLanguage.from( "sql" );
 
         StringBuilder query = new StringBuilder();
         String where = "";
@@ -291,284 +274,192 @@ public class Crud implements InformationObserver {
         if ( request.sortState != null ) {
             orderBy = sortTable( request.sortState );
         }
-        String[] t = request.tableId.split( "\\." );
-        String tableId = String.format( "\"%s\".\"%s\"", t[0], t[1] );
+
+        String fullTableName = getFullEntityName( request.entityId );
         query.append( "SELECT * FROM " )
-                .append( tableId )
+                .append( fullTableName )
                 .append( where )
                 .append( orderBy );
-        if ( !request.noLimit ) {
-            query.append( " LIMIT " )
-                    .append( getPageSize() )
-                    .append( " OFFSET " )
-                    .append( (Math.max( 0, request.currentPage - 1 )) * getPageSize() );
-        }
 
-        try {
-            result = executeSqlSelect( transaction.createStatement(), request, query.toString(), request.noLimit );
-            result.setXid( transaction.getXid().toString() );
-        } catch ( Exception e ) {
-            if ( request.filter != null ) {
-                result = new Result( "Error while filtering table " + request.tableId );
-            } else {
-                result = new Result( "Could not fetch table " + request.tableId );
-                log.error( "Caught exception while fetching a table", e );
-            }
-            try {
-                transaction.rollback();
-                return result;
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
+        TriFunction<ExecutedContext, UIRequest, Statement, ResultBuilder<?, ?, ?, ?>> builder = LanguageCrud.getToResult( language );
+
+        ImplementationContext implementationContext = LanguageManager.getINSTANCE().anyPrepareQuery(
+                QueryContext.builder()
+                        .query( query.toString() )
+                        .language( language )
+                        .transactions( List.of( transaction ) )
+                        .origin( transaction.getOrigin() )
+                        .batch( request.noLimit ? -1 : getPageSize() )
+                        .transactionManager( transactionManager )
+                        .build(), transaction ).get( 0 );
+        resultBuilder = (RelationalResultBuilder<?, ?>) builder.apply( implementationContext.execute( implementationContext.getStatement() ), request, implementationContext.getStatement() );
 
         // determine if it is a view or a table
-        CatalogTable catalogTable;
-        try {
-            catalogTable = catalog.getTable( this.databaseName, t[0], t[1] );
-            if ( catalogTable.modifiable ) {
-                result.setType( ResultType.TABLE );
-            } else {
-                result.setType( ResultType.VIEW );
-            }
-        } catch ( UnknownTableException | UnknownDatabaseException | UnknownSchemaException e ) {
-            log.error( "Caught exception", e );
-            return result.setError( "Could not retrieve type of Result (table/view)." );
+        LogicalTable table = Catalog.snapshot().rel().getTable( request.entityId ).orElseThrow();
+        resultBuilder.dataModel( table.dataModel );
+        if ( table.modifiable ) {
+            resultBuilder.type( ResultType.TABLE );
+        } else {
+            resultBuilder.type( ResultType.VIEW );
         }
 
         //get headers with default values
-        ArrayList<DbColumn> cols = new ArrayList<>();
-        ArrayList<String> primaryColumns;
-        if ( catalogTable.primaryKey != null ) {
-            CatalogPrimaryKey primaryKey = catalog.getPrimaryKey( catalogTable.primaryKey );
-            primaryColumns = new ArrayList<>( primaryKey.getColumnNames() );
+        List<UiColumnDefinition> cols = new ArrayList<>();
+        List<String> primaryColumns;
+        if ( table.primaryKey != null ) {
+            LogicalPrimaryKey primaryKey = Catalog.snapshot().rel().getPrimaryKey( table.primaryKey ).orElseThrow();
+            primaryColumns = new ArrayList<>( primaryKey.getFieldNames() );
         } else {
             primaryColumns = new ArrayList<>();
         }
-        for ( CatalogColumn catalogColumn : catalog.getColumns( catalogTable.id ) ) {
-            String defaultValue = catalogColumn.defaultValue == null ? null : catalogColumn.defaultValue.value;
-            String collectionsType = catalogColumn.collectionsType == null ? "" : catalogColumn.collectionsType.getName();
+        for ( LogicalColumn logicalColumn : Catalog.snapshot().rel().getColumns( table.id ) ) {
+            PolyValue defaultValue = logicalColumn.defaultValue == null ? null : logicalColumn.defaultValue.value;
+            String collectionsType = logicalColumn.collectionsType == null ? "" : logicalColumn.collectionsType.getName();
             cols.add(
-                    new DbColumn(
-                            catalogColumn.name,
-                            catalogColumn.type.getName(),
-                            collectionsType,
-                            catalogColumn.nullable,
-                            catalogColumn.length,
-                            catalogColumn.scale,
-                            catalogColumn.dimension,
-                            catalogColumn.cardinality,
-                            primaryColumns.contains( catalogColumn.name ),
-                            defaultValue,
-                            request.sortState == null ? new SortState() : request.sortState.get( catalogColumn.name ),
-                            request.filter == null || request.filter.get( catalogColumn.name ) == null ? "" : request.filter.get( catalogColumn.name ) ) );
+                    UiColumnDefinition.builder()
+                            .name( logicalColumn.name )
+                            .dataType( logicalColumn.type.getName() )
+                            .collectionsType( collectionsType )
+                            .nullable( logicalColumn.nullable )
+                            .precision( logicalColumn.length )
+                            .scale( logicalColumn.scale )
+                            .dimension( logicalColumn.dimension )
+                            .cardinality( logicalColumn.cardinality )
+                            .primary( primaryColumns.contains( logicalColumn.name ) )
+                            .defaultValue( defaultValue == null ? null : defaultValue.toJson() )
+                            .sort( request.sortState == null ? new SortState() : request.sortState.get( logicalColumn.name ) )
+                            .filter( request.filter == null || request.filter.get( logicalColumn.name ) == null ? "" : request.filter.get( logicalColumn.name ) ).build() );
         }
-        result.setHeader( cols.toArray( new DbColumn[0] ) );
+        resultBuilder.header( cols.toArray( new UiColumnDefinition[0] ) );
 
-        result.setCurrentPage( request.currentPage ).setTable( request.tableId );
-        int tableSize = 0;
+        resultBuilder.currentPage( request.currentPage ).table( table.name );
+        long tableSize = 0;
         try {
             tableSize = getTableSize( transaction, request );
         } catch ( Exception e ) {
             log.error( "Caught exception while determining page size", e );
         }
-        result.setHighestPage( (int) Math.ceil( (double) tableSize / getPageSize() ) );
+        resultBuilder.highestPage( (int) Math.ceil( (double) tableSize / getPageSize() ) );
         try {
             transaction.commit();
         } catch ( TransactionException e ) {
-            log.error( "Caught exception while committing transaction", e );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException transactionException ) {
-                log.error( "Exception while rollback", transactionException );
-            }
+            transaction.rollback( "Caught exception while committing transaction. " + e );
         }
-        return result;
-    }
-
-
-    ArrayList<SidebarElement> getSchemaTree( final Request req, final Response res ) {
-        SchemaTreeRequest request = this.gson.fromJson( req.body(), SchemaTreeRequest.class );
-        ArrayList<SidebarElement> result = new ArrayList<>();
-
-        if ( request.depth < 1 ) {
-            log.error( "Trying to fetch a schemaTree with depth < 1" );
-            return new ArrayList<>();
-        }
-
-        List<CatalogSchema> schemas = catalog.getSchemas( new Catalog.Pattern( databaseName ), null );
-        for ( CatalogSchema schema : schemas ) {
-            SidebarElement schemaTree = new SidebarElement( schema.name, schema.name, "", "cui-layers" );
-
-            if ( request.depth > 1 ) {
-                ArrayList<SidebarElement> tableTree = new ArrayList<>();
-                ArrayList<SidebarElement> viewTree = new ArrayList<>();
-                ArrayList<SidebarElement> collectionTree = new ArrayList<>();
-                List<CatalogTable> tables = catalog.getTables( schema.id, null );
-                for ( CatalogTable table : tables ) {
-                    String icon = "fa fa-table";
-                    if ( table.tableType == TableType.SOURCE ) {
-                        icon = "fa fa-plug";
-                    } else if ( table.tableType == TableType.VIEW ) {
-                        icon = "icon-eye";
-                    }
-                    SidebarElement tableElement = new SidebarElement( schema.name + "." + table.name, table.name, request.routerLinkRoot, icon );
-                    if ( request.depth > 2 ) {
-                        List<CatalogColumn> columns = catalog.getColumns( table.id );
-                        for ( CatalogColumn column : columns ) {
-                            tableElement.addChild( new SidebarElement( schema.name + "." + table.name + "." + column.name, column.name, request.routerLinkRoot ).setCssClass( "sidebarColumn" ) );
-                        }
-                    }
-
-                    if ( request.views ) {
-                        if ( table.tableType == TableType.TABLE || table.tableType == TableType.SOURCE ) {
-                            tableElement.setTableType( "TABLE" );
-                        } else if ( table.tableType == TableType.VIEW ) {
-                            tableElement.setTableType( "VIEW" );
-                        }
-                    }
-
-                    /*
-                    if ( table.tableType == TableType.TABLE || table.tableType == TableType.SOURCE ) {
-                        tableTree.add( tableElement );
-                    } else if ( request.views && table.tableType == TableType.VIEW ) {
-                        viewTree.add( tableElement );
-                    }
-                     */
-                    collectionTree.add( tableElement );
-                }
-
-
-
-                /*if ( request.showTable ) {
-                    schemaTree.addChild( new SidebarElement( schema.name + ".tables", "tables", request.routerLinkRoot, "fa fa-table" ).addChildren( tableTree ).setRouterLink( "" ) );
-                } else {
-                    schemaTree.addChildren( tableTree ).setRouterLink( "" );
-                }
-                if ( request.views ) {
-                    if ( request.showTable ) {
-                        schemaTree.addChild( new SidebarElement( schema.name + ".views", "views", request.routerLinkRoot, "icon-eye" ).addChildren( viewTree ).setRouterLink( "" ) );
-                    } else {
-                        schemaTree.addChildren( viewTree ).setRouterLink( "" );
-                    }
-
-                }*/
-                if ( request.showTable ) {
-                    schemaTree.addChild( new SidebarElement( schema.name + ".tables", "tables", request.routerLinkRoot, "fa fa-table" ).addChildren( collectionTree ).setRouterLink( "" ) );
-                } else {
-                    schemaTree.addChildren( collectionTree ).setRouterLink( "" );
-                }
-            }
-            result.add( schemaTree );
-        }
-
-        return result;
+        return resultBuilder.build();
     }
 
 
     /**
-     * Get all tables of a schema
+     * Get all tables of a namespace
      */
-    List<DbTable> getTables( final Request req, final Response res ) {
-        Transaction transaction = getTransaction();
-        EditTableRequest request = this.gson.fromJson( req.body(), EditTableRequest.class );
-        long schemaId = transaction.getDefaultSchema().id;
-        String requestedSchema;
-        if ( request.schema != null ) {
-            requestedSchema = request.schema;
-        } else {
-            requestedSchema = catalog.getSchema( schemaId ).name;
-        }
+    void getEntities( final Context ctx ) {
+        EditTableRequest request = ctx.bodyAsClass( EditTableRequest.class );
+        long namespaceId = request.namespaceId != null ? request.namespaceId : Catalog.defaultNamespaceId;
+        LogicalNamespace namespace = Catalog.snapshot().getNamespace( namespaceId ).orElseThrow();
 
-        try {
-            transaction.commit();
-        } catch ( TransactionException e ) {
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
+        List<? extends LogicalEntity> entities = switch ( namespace.dataModel ) {
+            case RELATIONAL -> Catalog.snapshot().rel().getTables( namespace.id, null );
+            case DOCUMENT -> Catalog.snapshot().doc().getCollections( namespace.id, null );
+            case GRAPH -> Catalog.snapshot().graph().getGraphs( null );
+        };
 
-        List<CatalogTable> tables = catalog.getTables( new Catalog.Pattern( databaseName ), new Catalog.Pattern( requestedSchema ), null );
-        ArrayList<DbTable> result = new ArrayList<>();
-        for ( CatalogTable t : tables ) {
-            result.add( new DbTable( t.name, t.getSchemaName(), t.modifiable, t.tableType ) );
+        List<DbTable> result = new ArrayList<>();
+        for ( LogicalEntity e : entities ) {
+            result.add( new DbTable( e.name, namespace.name, e.modifiable, e.entityType ) );
         }
-        return result;
+        ctx.json( result );
     }
 
 
-    Result renameTable( final Request req, final Response res ) {
-        Index table = this.gson.fromJson( req.body(), Index.class );
-        String query = String.format( "ALTER TABLE \"%s\".\"%s\" RENAME TO \"%s\"", table.getSchema(), table.getTable(), table.getName() );
-        Transaction transaction = getTransaction();
-        Result result;
-        try {
-            int rows = executeSqlUpdate( transaction, query );
-            result = new Result( rows ).setGeneratedQuery( query );
-            transaction.commit();
-        } catch ( QueryExecutionException | TransactionException e ) {
-            result = new Result( e );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
-        return result;
+    void renameTable( final Context ctx ) {
+        IndexModel table = ctx.bodyAsClass( IndexModel.class );
+        String query = String.format( "ALTER TABLE \"%s\".\"%s\" RENAME TO \"%s\"", table.getNamespaceId(), table.getEntityId(), table.getName() );
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> result = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+
+        ctx.json( result );
     }
 
 
     /**
      * Drop or truncate a table
      */
-    Result dropTruncateTable( final Request req, final Response res ) {
-        EditTableRequest request = this.gson.fromJson( req.body(), EditTableRequest.class );
-        Transaction transaction = getTransaction();
-        Result result;
+    void dropTruncateTable( final Context ctx ) {
+        EditTableRequest request = ctx.bodyAsClass( EditTableRequest.class );
+
         StringBuilder query = new StringBuilder();
-        if ( request.tableType != null && request.action.equalsIgnoreCase( "drop" ) && request.tableType.equals( "VIEW" ) ) {
+        if ( request.tableType != null && request.action.equalsIgnoreCase( "drop" ) && request.tableType == EntityType.VIEW ) {
             query.append( "DROP VIEW " );
         } else if ( request.action.equalsIgnoreCase( "drop" ) ) {
             query.append( "DROP TABLE " );
         } else if ( request.action.equalsIgnoreCase( "truncate" ) ) {
             query.append( "TRUNCATE TABLE " );
         }
-        String tableId = String.format( "\"%s\".\"%s\"", request.schema, request.table );
-        query.append( tableId );
-        try {
-            int a = executeSqlUpdate( transaction, query.toString() );
-            result = new Result( a ).setGeneratedQuery( query.toString() );
-            transaction.commit();
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Caught exception while dropping or truncating a table", e );
-            result = new Result( e ).setGeneratedQuery( query.toString() );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
-        return result;
+
+        Pair<LogicalNamespace, LogicalTable> namespaceTable = getNamespaceTable( request );
+
+        String fullTableName = String.format( "\"%s\".\"%s\"", namespaceTable.left.name, namespaceTable.right.name );
+        query.append( fullTableName );
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> result = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query.toString() )
+                        .language( language )
+                        .userId( Catalog.defaultUserId )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( result );
+    }
+
+
+    private Pair<LogicalNamespace, LogicalTable> getNamespaceTable( EditTableRequest request ) {
+        long namespaceId = request.namespaceId == null ? Catalog.defaultNamespaceId : request.namespaceId;
+        LogicalNamespace namespace = Catalog.snapshot().getNamespace( namespaceId ).orElseThrow();
+        long entityId = request.entityId == null ? -1 : request.entityId;
+        LogicalTable table = Catalog.snapshot().rel().getTable( entityId ).orElseThrow();
+
+        return Pair.of( namespace, table );
+    }
+
+
+    private LogicalNamespace getNamespace( EditTableRequest request ) {
+        long namespaceId = request.namespaceId == null ? Catalog.defaultNamespaceId : request.namespaceId;
+
+        return Catalog.snapshot().getNamespace( namespaceId ).orElseThrow();
+    }
+
+
+    private String getFullEntityName( long entityId ) {
+        LogicalTable table = Catalog.snapshot().rel().getTable( entityId ).orElseThrow();
+        LogicalNamespace namespace = Catalog.snapshot().getNamespace( table.namespaceId ).orElseThrow();
+        return String.format( "\"%s\".\"%s\"", namespace.name, table.name );
     }
 
 
     /**
      * Create a new table
      */
-    Result createTable( final Request req, final Response res ) {
-        EditTableRequest request = this.gson.fromJson( req.body(), EditTableRequest.class );
-        Transaction transaction = getTransaction();
+    void createTable( final Context ctx ) {
+        EditTableRequest request = ctx.bodyAsClass( EditTableRequest.class );
+
         StringBuilder query = new StringBuilder();
         StringJoiner colJoiner = new StringJoiner( "," );
-        String tableId = String.format( "\"%s\".\"%s\"", request.schema, request.table );
-        query.append( "CREATE TABLE " ).append( tableId ).append( "(" );
+        LogicalNamespace namespace = getNamespace( request );
+
+        String fullTableName = String.format( "\"%s\".\"%s\"", namespace.name, request.entityName );
+        query.append( "CREATE TABLE " ).append( fullTableName ).append( "(" );
         StringBuilder colBuilder;
-        Result result;
+
         StringJoiner primaryKeys = new StringJoiner( ",", "PRIMARY KEY (", ")" );
         int primaryCounter = 0;
-        for ( DbColumn col : request.columns ) {
+        for ( UiColumnDefinition col : request.columns ) {
             colBuilder = new StringBuilder();
             colBuilder.append( "\"" ).append( col.name ).append( "\" " ).append( col.dataType );
             if ( col.precision != null ) {
@@ -578,7 +469,7 @@ public class Crud implements InformationObserver {
                 }
                 colBuilder.append( ")" );
             }
-            if ( col.collectionsType != null && !col.collectionsType.equals( "" ) ) {
+            if ( col.collectionsType != null && !col.collectionsType.isEmpty() ) {
                 colBuilder.append( " " ).append( col.collectionsType );
                 if ( col.dimension != null ) {
                     colBuilder.append( "(" ).append( col.dimension );
@@ -616,35 +507,28 @@ public class Crud implements InformationObserver {
         if ( primaryCounter > 0 ) {
             colJoiner.add( primaryKeys.toString() );
         }
-        query.append( colJoiner.toString() );
+        query.append( colJoiner );
         query.append( ")" );
-        if ( request.store != null && !request.store.equals( "" ) ) {
-            query.append( String.format( " ON STORE \"%s\"", request.store ) );
+        if ( request.storeId != null ) {
+            LogicalAdapter adapter = Catalog.snapshot().getAdapter( request.storeId ).orElseThrow();
+            query.append( String.format( " ON STORE \"%s\"", adapter.uniqueName ) );
         }
-
-        try {
-            int a = executeSqlUpdate( transaction, query.toString() );
-            result = new Result( a ).setGeneratedQuery( query.toString() );
-            transaction.commit();
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Caught exception while creating a table", e );
-            result = new Result( e ).setGeneratedQuery( query.toString() );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback CREATE TABLE statement: {}", ex.getMessage(), ex );
-            }
-        }
-        return result;
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> result = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query.toString() )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( result );
     }
 
 
     /**
      * Initialize a multipart request, so that the values can be fetched with request.raw().getPart( name )
-     *
-     * @param req Spark request
      */
-    private void initMultipart( final Request req ) {
+    private void initMultipart( final Context ctx ) {
         //see https://stackoverflow.com/questions/34746900/sparkjava-upload-file-didt-work-in-spark-java-framework
         String location = System.getProperty( "java.io.tmpdir" + File.separator + "Polypheny-DB" );
         long maxSizeMB = RuntimeConfig.UI_UPLOAD_SIZE_MB.getInteger();
@@ -652,128 +536,135 @@ public class Crud implements InformationObserver {
         long maxRequestSize = 1_000_000L * maxSizeMB;
         int fileSizeThreshold = 1024;
         MultipartConfigElement multipartConfigElement = new MultipartConfigElement( location, maxFileSize, maxRequestSize, fileSizeThreshold );
-        req.raw().setAttribute( "org.eclipse.jetty.multipartConfig", multipartConfigElement );
+        ctx.attribute( "org.eclipse.jetty.multipartConfig", multipartConfigElement );
     }
 
 
     /**
      * Insert data into a table
      */
-    Result insertRow( final Request req, final Response res ) {
-        initMultipart( req );
-        String tableId;
-        try {
-            tableId = new BufferedReader( new InputStreamReader( req.raw().getPart( "tableId" ).getInputStream(), StandardCharsets.UTF_8 ) ).lines().collect( Collectors.joining( System.lineSeparator() ) );
-        } catch ( IOException | ServletException e ) {
-            return new Result( e );
+    void insertTuple( final Context ctx ) throws IOException {
+        ctx.contentType( "multipart/form-data" );
+        initMultipart( ctx );
+        String unparsed = ctx.formParam( "entityId" );
+        if ( unparsed == null ) {
+            throw new GenericRuntimeException( "Error on tuple insert" );
         }
-        String[] split = tableId.split( "\\." );
-        tableId = String.format( "\"%s\".\"%s\"", split[0], split[1] );
+
+        long entityId = Long.parseLong( unparsed );
+
+        LogicalTable table = Catalog.snapshot().rel().getTable( entityId ).orElseThrow();
+        LogicalNamespace namespace = Catalog.snapshot().getNamespace( table.namespaceId ).orElseThrow();
+        String entityName = String.format( "\"%s\".\"%s\"", namespace.name, table.name );
 
         Transaction transaction = getTransaction();
         Statement statement = transaction.createStatement();
         StringJoiner columns = new StringJoiner( ",", "(", ")" );
         StringJoiner values = new StringJoiner( ",", "(", ")" );
 
-        List<CatalogColumn> catalogColumns = catalog.getColumns( new Catalog.Pattern( "APP" ), new Catalog.Pattern( split[0] ), new Catalog.Pattern( split[1] ), null );
+        List<LogicalColumn> logicalColumns = Catalog.snapshot().rel().getColumns( table.id );
         try {
             int i = 0;
-            for ( CatalogColumn catalogColumn : catalogColumns ) {
+            for ( LogicalColumn logicalColumn : logicalColumns ) {
                 //part is null if it does not exist
-                Part part = req.raw().getPart( catalogColumn.name );
+                Part part = ctx.req.getPart( logicalColumn.name );
                 if ( part == null ) {
                     //don't add if default value is set
-                    if ( catalogColumn.defaultValue == null ) {
+                    if ( logicalColumn.defaultValue == null ) {
                         values.add( "NULL" );
-                        columns.add( "\"" + catalogColumn.name + "\"" );
+                        columns.add( "\"" + logicalColumn.name + "\"" );
                     }
                 } else {
-                    columns.add( "\"" + catalogColumn.name + "\"" );
+                    columns.add( "\"" + logicalColumn.name + "\"" );
                     if ( part.getSubmittedFileName() == null ) {
                         String value = new BufferedReader( new InputStreamReader( part.getInputStream(), StandardCharsets.UTF_8 ) ).lines().collect( Collectors.joining( System.lineSeparator() ) );
-                        values.add( uiValueToSql( value, catalogColumn.type, catalogColumn.collectionsType ) );
+                        if ( logicalColumn.name.equals( "_id" ) ) {
+                            if ( value.isEmpty() ) {
+                                value = BsonUtil.getObjectId();
+                            }
+                        }
+                        values.add( uiValueToSql( value, logicalColumn.type, logicalColumn.collectionsType ) );
                     } else {
                         values.add( "?" );
                         FileInputHandle fih = new FileInputHandle( statement, part.getInputStream() );
-                        statement.getDataContext().addParameterValues( i++, catalogColumn.getRelDataType( transaction.getTypeFactory() ), ImmutableList.of( fih ) );
+                        statement.getDataContext().addParameterValues( i++, logicalColumn.getAlgDataType( transaction.getTypeFactory() ), ImmutableList.of( PolyBlob.of( fih.getData() ) ) );
                     }
                 }
             }
-        } catch ( IOException | ServletException e ) {
-            log.error( "Could not generate INSERT statement", e );
-            return new Result( e );
+        } catch ( ServletException e ) {
+            throw new GenericRuntimeException( e );
         }
 
-        String query = String.format( "INSERT INTO %s %s VALUES %s", tableId, columns.toString(), values.toString() );
-        try {
-            int numRows = executeSqlUpdate( statement, transaction, query );
-            transaction.commit();
-            return new Result( numRows ).setGeneratedQuery( query );
-        } catch ( Exception | TransactionException e ) {
-            log.info( "Generated query: {}", query );
-            log.error( "Could not insert row", e );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException e2 ) {
-                log.error( "Caught error while rolling back transaction", e2 );
-            }
-            return new Result( e ).setGeneratedQuery( query );
-        }
+        String query = String.format( "INSERT INTO %s %s VALUES %s", entityName, columns, values );
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        QueryContext context = QueryContext.builder()
+                .query( query )
+                .language( language )
+                .origin( ORIGIN )
+                .statement( statement )
+                .transactions( new ArrayList<>( List.of( transaction ) ) )
+                .transactionManager( transactionManager )
+                .build();
+
+        UIRequest request = UIRequest.builder().build();
+        Result<?, ?> result = LanguageCrud.anyQueryResult( context, request ).get( 0 );
+        ctx.json( result );
+
     }
 
 
     /**
      * Run any query coming from the SQL console
      */
-    ArrayList<Result> anyQuery( final QueryRequest request, final Session session ) {
-        Transaction transaction = getTransaction( request.analyze );
+    /*public static List<RelationalResult> anySqlQuery( final QueryRequest request, final Session session, Crud crud ) {
+        Transaction transaction = getTransaction( request.analyze, request.cache, crud );
+
         if ( request.analyze ) {
             transaction.getQueryAnalyzer().setSession( session );
         }
 
-        ArrayList<Result> results = new ArrayList<>();
+        List<RelationalResult> results = new ArrayList<>();
         boolean autoCommit = true;
 
         // This is not a nice solution. In case of a sql script with auto commit only the first statement is analyzed
         // and in case of auto commit of, the information is overwritten
         InformationManager queryAnalyzer = null;
         if ( request.analyze ) {
-            queryAnalyzer = transaction.getQueryAnalyzer().observe( this );
+            queryAnalyzer = transaction.getQueryAnalyzer().observe( crud );
         }
 
         // TODO: make it possible to use pagination
+        String[] queries;
+        try {
+            queries = transaction.getProcessor( QueryLanguage.from( "sql" ) ).splitStatements( request.query ).toArray( new String[0] );
+        } catch ( RuntimeException e ) {
+            return List.of( RelationalResult.builder().error( "Syntax error: " + e.getMessage() ).build() );
+        }
 
         // No autoCommit if the query has commits.
         // Ignore case: from: https://alvinalexander.com/blog/post/java/java-how-case-insensitive-search-string-matches-method
         Pattern p = Pattern.compile( ".*(COMMIT|ROLLBACK).*", Pattern.MULTILINE | Pattern.CASE_INSENSITIVE | Pattern.DOTALL );
-        Matcher m = p.matcher( request.query );
-        if ( m.matches() ) {
-            autoCommit = false;
+        for ( String query : queries ) {
+            if ( p.matcher( query ).matches() ) {
+                autoCommit = false;
+                break;
+            }
         }
-
         long executionTime = 0;
         long temp = 0;
-        // remove all comments
-        String allQueries = request.query;
-        //remove comments
-        allQueries = allQueries.replaceAll( "(?s)(\\/\\*.*?\\*\\/)", "" );
-        allQueries = allQueries.replaceAll( "(?m)(--.*?$)", "" );
-        //remove whitespace at the end
-        allQueries = allQueries.replaceAll( "(\\s*)$", "" );
-        String[] queries = allQueries.split( ";(?=(?:[^\']*\'[^\']*\')*[^\']*$)" );
         boolean noLimit;
         for ( String query : queries ) {
-            Result result;
+            RelationalResult result;
             if ( !transaction.isActive() ) {
-                transaction = getTransaction( request.analyze );
+                transaction = getTransaction( request.analyze, request.cache, crud );
             }
             if ( Pattern.matches( "(?si:[\\s]*COMMIT.*)", query ) ) {
                 try {
                     temp = System.nanoTime();
                     transaction.commit();
                     executionTime += System.nanoTime() - temp;
-                    transaction = getTransaction( request.analyze );
-                    results.add( new Result().setGeneratedQuery( query ) );
+                    transaction = getTransaction( request.analyze, request.cache, crud );
+                    results.add( RelationalResult.builder().query( query ).build() );
                 } catch ( TransactionException e ) {
                     log.error( "Caught exception while committing a query from the console", e );
                     executionTime += System.nanoTime() - temp;
@@ -784,48 +675,37 @@ public class Crud implements InformationObserver {
                     temp = System.nanoTime();
                     transaction.rollback();
                     executionTime += System.nanoTime() - temp;
-                    transaction = getTransaction( request.analyze );
-                    results.add( new Result().setGeneratedQuery( query ) );
+                    transaction = getTransaction( request.analyze, request.cache, crud );
+                    results.add( RelationalResult.builder().query( query ).build() );
                 } catch ( TransactionException e ) {
                     log.error( "Caught exception while rolling back a query from the console", e );
                     executionTime += System.nanoTime() - temp;
                 }
             } else if ( Pattern.matches( "(?si:^[\\s]*[/(\\s]*SELECT.*)", query ) ) {
                 // Add limit if not specified
-                Pattern p2 = Pattern.compile( ".*?(?si:limit)[\\s\\S]*", Pattern.MULTILINE | Pattern.CASE_INSENSITIVE | Pattern.DOTALL );
-                if ( !p2.matcher( query ).find() && !request.noLimit ) {
-                    noLimit = false;
-                }
+                Pattern p2 = Pattern.compile( "(?si:limit)[\\s]+[0-9]+[\\s]*$" );
                 //If the user specifies a limit
-                else {
-                    noLimit = true;
-                }
-                // decrease limit if it is too large
-                /*else {
-                    Pattern pattern = Pattern.compile( "(.*?LIMIT[\\s+])(\\d+)", Pattern.MULTILINE | Pattern.CASE_INSENSITIVE | Pattern.DOTALL );
-                    Matcher limitMatcher = pattern.matcher( query );
-                    if ( limitMatcher.find() ) {
-                        int limit = Integer.parseInt( limitMatcher.group( 2 ) );
-                        if ( limit > getPageSize() ) {
-                            // see https://stackoverflow.com/questions/38296673/replace-group-1-of-java-regex-with-out-replacing-the-entire-regex?rq=1
-                            query = limitMatcher.replaceFirst( "$1 " + getPageSize() );
-                        }
-                    }
-                }*/
+                noLimit = p2.matcher( query ).find() || request.noLimit;
                 try {
                     temp = System.nanoTime();
-                    result = executeSqlSelect( transaction.createStatement(), request, query, noLimit ).setGeneratedQuery( query ).setXid( transaction.getXid().toString() );
+                    result = executeSqlSelect( transaction.createStatement(), request, query, noLimit, crud )
+                            .query( query )
+                            .xid( transaction.getXid().toString() ).build();
                     executionTime += System.nanoTime() - temp;
                     results.add( result );
                     if ( autoCommit ) {
                         transaction.commit();
-                        transaction = getTransaction( request.analyze );
+                        transaction = Crud.getTransaction( request.analyze, request.cache, crud );
                     }
                 } catch ( QueryExecutionException | TransactionException | RuntimeException e ) {
                     log.error( "Caught exception while executing a query from the console", e );
                     executionTime += System.nanoTime() - temp;
-                    result = new Result( e ).setGeneratedQuery( query ).setXid( transaction.getXid().toString() );
-                    results.add( result );
+                    if ( e.getCause() instanceof AvaticaRuntimeException ) {
+                        result = RelationalResult.builder().error( ((AvaticaRuntimeException) e.getCause()).getErrorMessage() ).build();
+                    } else {
+                        result = RelationalResult.builder().error( e.getCause().getMessage() ).build();
+                    }
+                    results.add( result.toBuilder().query( query ).xid( transaction.getXid().toString() ).build() );
                     try {
                         transaction.rollback();
                     } catch ( TransactionException ex ) {
@@ -835,19 +715,18 @@ public class Crud implements InformationObserver {
             } else {
                 try {
                     temp = System.nanoTime();
-                    int numOfRows = executeSqlUpdate( transaction, query );
+                    int numOfRows = crud.executeSqlUpdate( transaction, query );
                     executionTime += System.nanoTime() - temp;
-                    result = new Result( numOfRows ).setGeneratedQuery( query ).setXid( transaction.getXid().toString() );
-                    results.add( result );
+
+                    results.add( RelationalResult.builder().affectedTuples( numOfRows ).query( query ).xid( transaction.getXid().toString() ).build() );
                     if ( autoCommit ) {
                         transaction.commit();
-                        transaction = getTransaction( request.analyze );
+                        transaction = getTransaction( request.analyze, request.cache, crud );
                     }
                 } catch ( QueryExecutionException | TransactionException | RuntimeException e ) {
                     log.error( "Caught exception while executing a query from the console", e );
                     executionTime += System.nanoTime() - temp;
-                    result = new Result( e ).setGeneratedQuery( query ).setXid( transaction.getXid().toString() );
-                    results.add( result );
+                    results.add( RelationalResult.builder().error( e.getMessage() ).query( query ).xid( transaction.getXid().toString() ).build() );
                     try {
                         transaction.rollback();
                     } catch ( TransactionException ex ) {
@@ -858,252 +737,56 @@ public class Crud implements InformationObserver {
 
         }
 
+        String commitStatus;
         try {
             transaction.commit();
+            commitStatus = "Committed";
         } catch ( TransactionException e ) {
             log.error( "Caught exception", e );
-            results.add( new Result( e ) );
+            results.add( RelationalResult.builder().error( e.getMessage() ).build() );
             try {
                 transaction.rollback();
+                commitStatus = "Rolled back";
             } catch ( TransactionException ex ) {
                 log.error( "Caught exception while rollback", e );
+                commitStatus = "Error while rolling back";
             }
         }
 
         if ( queryAnalyzer != null ) {
-            InformationPage p1 = new InformationPage( "Query analysis", "Analysis of the query." );
-            InformationGroup g1 = new InformationGroup( p1, "Execution time" );
-            InformationText text;
-            if ( executionTime < 1e4 ) {
-                text = new InformationText( g1, String.format( "Execution time: %d nanoseconds", executionTime ) );
-            } else {
-                long millis = TimeUnit.MILLISECONDS.convert( executionTime, TimeUnit.NANOSECONDS );
-                // format time: see: https://stackoverflow.com/questions/625433/how-to-convert-milliseconds-to-x-mins-x-seconds-in-java#answer-625444
-                //noinspection SuspiciousDateFormat
-                DateFormat df = new SimpleDateFormat( "m 'min' s 'sec' S 'ms'" );
-                String durationText = df.format( new Date( millis ) );
-                text = new InformationText( g1, String.format( "Execution time: %s", durationText ) );
-            }
-            queryAnalyzer.addPage( p1 );
-            queryAnalyzer.addGroup( g1 );
-            queryAnalyzer.registerInformation( text );
+            attachQueryAnalyzer( queryAnalyzer, executionTime, commitStatus, results.size() );
         }
 
         return results;
-    }
-
-
-    /**
-     * Return all available statistics to the client
-     */
-    ConcurrentHashMap<?, ?> getStatistics( final Request req, final Response res ) {
-        if ( RuntimeConfig.DYNAMIC_QUERYING.getBoolean() ) {
-            return statisticsManager.getStatisticSchemaMap();
+    }*/
+    public static void attachQueryAnalyzer( InformationManager queryAnalyzer, long executionTime, String commitStatus, int numberOfQueries ) {
+        InformationPage p1 = new InformationPage( "Transaction", "Analysis of the transaction." );
+        queryAnalyzer.addPage( p1 );
+        InformationGroup g1 = new InformationGroup( p1, "Execution time" );
+        queryAnalyzer.addGroup( g1 );
+        InformationText text1;
+        if ( executionTime < 1e4 ) {
+            text1 = new InformationText( g1, String.format( "Execution time: %d nanoseconds", executionTime ) );
         } else {
-            return new ConcurrentHashMap<>();
+            long millis = TimeUnit.MILLISECONDS.convert( executionTime, TimeUnit.NANOSECONDS );
+            // format time: see: https://stackoverflow.com/questions/625433/how-to-convert-milliseconds-to-x-mins-x-seconds-in-java#answer-625444
+            DateFormat df = new SimpleDateFormat( "m 'min' s 'sec' S 'ms'" );
+            String durationText = df.format( new Date( millis ) );
+            text1 = new InformationText( g1, String.format( "Execution time: %s", durationText ) );
         }
+        queryAnalyzer.registerInformation( text1 );
 
-    }
+        // Number of queries
+        InformationGroup g2 = new InformationGroup( p1, "Number of queries" );
+        queryAnalyzer.addGroup( g2 );
+        InformationText text2 = new InformationText( g2, String.format( "Number of queries in this transaction: %d", numberOfQueries ) );
+        queryAnalyzer.registerInformation( text2 );
 
-
-    /**
-     * Gets the classified Data from User
-     * return possibly interesting Data to User
-     */
-    public Result classifyData( Request req, Response res ) {
-        ClassifyAllData classifyAllData = this.gson.fromJson( req.body(), ClassifyAllData.class );
-        ExploreManager exploreManager = ExploreManager.getInstance();
-
-        boolean isConvertedToSql = isClassificationToSql();
-
-        Explore explore = exploreManager.classifyData( classifyAllData.id, classifyAllData.classified, isConvertedToSql );
-
-        if ( isConvertedToSql ) {
-            Transaction transaction = getTransaction();
-            Statement statement = transaction.createStatement();
-            Result result;
-
-            try {
-                result = executeSqlSelect( statement, classifyAllData, explore.getClassifiedSqlStatement(), false ).setGeneratedQuery( explore.getClassifiedSqlStatement() );
-                transaction.commit();
-            } catch ( QueryExecutionException | TransactionException | RuntimeException e ) {
-                log.error( "Caught exception while executing a query from the console", e );
-                result = new Result( e ).setGeneratedQuery( explore.getClassifiedSqlStatement() );
-                try {
-                    transaction.rollback();
-                } catch ( TransactionException ex ) {
-                    log.error( "Caught exception while rollback", ex );
-                }
-            }
-
-            result.setExplorerId( explore.getId() );
-            result.setCurrentPage( classifyAllData.cPage ).setTable( classifyAllData.tableId );
-
-            result.setHighestPage( (int) Math.ceil( (double) explore.getTableSize() / getPageSize() ) );
-            result.setClassificationInfo( "NoClassificationPossible" );
-            result.setConvertedToSql( isConvertedToSql );
-
-            return result;
-        } else {
-            Result result = new Result( classifyAllData.header, Arrays.copyOfRange( explore.getData(), 0, 10 ) );
-
-            result.setClassificationInfo( "NoClassificationPossible" );
-            result.setExplorerId( explore.getId() );
-
-            result.setCurrentPage( classifyAllData.cPage ).setTable( classifyAllData.tableId );
-            result.setHighestPage( (int) Math.ceil( (double) explore.getData().length / getPageSize() ) );
-            result.setConvertedToSql( isConvertedToSql );
-            return result;
-        }
-
-    }
-
-
-    /**
-     * For pagination within the Explore-by-Example table
-     */
-    public Object getExploreTables( Request request, Response response ) {
-        ExploreTables exploreTables = this.gson.fromJson( request.body(), ExploreTables.class );
-        Transaction transaction = getTransaction();
-        Statement statement = transaction.createStatement();
-
-        Result result;
-        ExploreManager exploreManager = ExploreManager.getInstance();
-        Explore explore = exploreManager.getExploreInformation( exploreTables.id );
-        String[][] paginationData;
-
-        String query = explore.getSqlStatement() + " OFFSET " + ((Math.max( 0, exploreTables.cPage - 1 )) * getPageSize());
-
-        if ( !explore.isConvertedToSql() && !explore.isClassificationPossible() ) {
-            int tablesize = explore.getData().length;
-
-            if ( tablesize >= ((Math.max( 0, exploreTables.cPage - 1 )) * getPageSize()) && tablesize < ((Math.max( 0, exploreTables.cPage )) * getPageSize()) ) {
-                paginationData = Arrays.copyOfRange( explore.getData(), ((Math.max( 0, exploreTables.cPage - 1 )) * getPageSize()), tablesize );
-            } else {
-                paginationData = Arrays.copyOfRange( explore.getData(), ((Math.max( 0, exploreTables.cPage - 1 )) * getPageSize()), ((Math.max( 0, exploreTables.cPage )) * getPageSize()) );
-            }
-            result = new Result( exploreTables.columns, paginationData );
-            result.setClassificationInfo( "NoClassificationPossible" );
-            result.setExplorerId( explore.getId() );
-
-            result.setCurrentPage( exploreTables.cPage ).setTable( exploreTables.tableId );
-            result.setHighestPage( (int) Math.ceil( (double) tablesize / getPageSize() ) );
-
-            return result;
-        }
-
-        try {
-            result = executeSqlSelect( statement, exploreTables, query );
-        } catch ( QueryExecutionException e ) {
-            log.error( "Caught exception while fetching a table", e );
-            result = new Result( "Could not fetch table " + exploreTables.tableId );
-            try {
-                transaction.rollback();
-                return result;
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
-
-        try {
-            transaction.commit();
-        } catch ( TransactionException e ) {
-            log.error( "Caught exception while committing transaction", e );
-        }
-        result.setExplorerId( explore.getId() );
-        result.setCurrentPage( exploreTables.cPage ).setTable( exploreTables.tableId );
-        int tableSize = explore.getTableSize();
-
-        result.setHighestPage( (int) Math.ceil( (double) tableSize / getPageSize() ) );
-
-        if ( !explore.isClassificationPossible() ) {
-            result.setClassificationInfo( "NoClassificationPossible" );
-        } else {
-            result.setClassificationInfo( "ClassificationPossible" );
-        }
-        result.setIncludesClassificationInfo( explore.isDataAfterClassification );
-
-        if ( explore.isDataAfterClassification ) {
-            int tablesize = explore.getDataAfterClassification().size();
-            List<String[]> paginationDataList;
-            if ( tablesize >= ((Math.max( 0, exploreTables.cPage - 1 )) * getPageSize()) && tablesize < ((Math.max( 0, exploreTables.cPage )) * getPageSize()) ) {
-                paginationDataList = explore.getDataAfterClassification().subList( ((Math.max( 0, exploreTables.cPage - 1 )) * getPageSize()), tablesize );
-            } else {
-                paginationDataList = explore.getDataAfterClassification().subList( ((Math.max( 0, exploreTables.cPage - 1 )) * getPageSize()), ((Math.max( 0, exploreTables.cPage )) * getPageSize()) );
-            }
-
-            paginationData = new String[paginationDataList.size()][];
-            for ( int i = 0; i < paginationDataList.size(); i++ ) {
-                paginationData[i] = paginationDataList.get( i );
-            }
-
-            result.setClassifiedData( paginationData );
-        }
-        return result;
-
-    }
-
-
-    /**
-     * Creates the initial query for the Explore-by-Example process
-     */
-    public Result createInitialExploreQuery( Request req, Response res ) {
-        QueryExplorationRequest queryExplorationRequest = this.gson.fromJson( req.body(), QueryExplorationRequest.class );
-        ExploreManager exploreManager = ExploreManager.getInstance();
-        Transaction transaction = getTransaction( queryExplorationRequest.analyze );
-        Statement statement = transaction.createStatement();
-
-        Result result;
-
-        Explore explore = exploreManager.createSqlQuery( null, queryExplorationRequest.query );
-        if ( explore.getDataType() == null ) {
-            return new Result( "Explore by Example is only available for tables with the following datatypes: VARCHAR, INTEGER, SMALLINT, TINYINT, BIGINT, DECIMAL" );
-        }
-
-        String query = explore.getSqlStatement();
-        try {
-            result = executeSqlSelect( statement, queryExplorationRequest, query, false ).setGeneratedQuery( query );
-            transaction.commit();
-        } catch ( QueryExecutionException | TransactionException | RuntimeException e ) {
-            log.error( "Caught exception while executing a query from the console", e );
-            result = new Result( e ).setGeneratedQuery( query );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Caught exception while rollback", ex );
-            }
-        }
-
-        result.setExplorerId( explore.getId() );
-        if ( !explore.isClassificationPossible() ) {
-            result.setClassificationInfo( "NoClassificationPossible" );
-
-        } else {
-            result.setClassificationInfo( "ClassificationPossible" );
-        }
-        result.setCurrentPage( queryExplorationRequest.cPage ).setTable( queryExplorationRequest.tableId );
-        result.setHighestPage( (int) Math.ceil( (double) explore.getTableSize() / getPageSize() ) );
-
-        return result;
-    }
-
-
-    /**
-     * Start Classification, classifies the initial dataset, to show what would be within the final result set
-     */
-    public ExploreResult exploration( Request req, Response res ) {
-        ExploreData exploreData = this.gson.fromJson( req.body(), ExploreData.class );
-
-        String[] dataType = new String[exploreData.header.length + 1];
-        for ( int i = 0; i < exploreData.header.length; i++ ) {
-            dataType[i] = exploreData.header[i].dataType;
-        }
-        dataType[exploreData.header.length] = "VARCHAR";
-
-        ExploreManager e = ExploreManager.getInstance();
-        Explore explore = e.exploreData( exploreData.id, exploreData.classified, dataType );
-
-        return new ExploreResult( exploreData.header, explore.getDataAfterClassification(), explore.getId(), explore.getBuildGraph() );
+        // Commit Status
+        InformationGroup g3 = new InformationGroup( p1, "Status" );
+        queryAnalyzer.addGroup( g3 );
+        InformationText text3 = new InformationText( g3, commitStatus );
+        queryAnalyzer.registerInformation( text3 );
     }
 
 
@@ -1136,352 +819,380 @@ public class Crud implements InformationObserver {
      * Compute a WHERE condition from a filter that only consists of the PK column WHERE clauses
      * There WHERE clause contains a space at the beginning, for convenience
      *
-     * @param tableName Table name
-     * @param columnName Column name
      * @param filter Filter. Key: column name, value: the value of the entry, e.g. 1 or abc or [1,2,3] or {@code null}
      */
-    private String computeWherePK( final String tableName, final String columnName, final Map<String, String> filter ) {
+    private String computeWherePK( final LogicalTable table, final Map<String, String> filter ) {
         StringJoiner joiner = new StringJoiner( " AND ", "", "" );
-        Map<String, CatalogColumn> catalogColumns = getCatalogColumns( tableName, columnName );
-        CatalogTable catalogTable;
-        try {
-            catalogTable = catalog.getTable( databaseName, tableName, columnName );
-            CatalogPrimaryKey pk = catalog.getPrimaryKey( catalogTable.primaryKey );
-            for ( long colId : pk.columnIds ) {
-                String colName = catalog.getColumn( colId ).name;
-                String condition;
-                if ( filter.containsKey( colName ) ) {
-                    String val = filter.get( colName );
-                    CatalogColumn col = catalogColumns.get( colName );
-                    condition = uiValueToSql( val, col.type, col.collectionsType );
-                    condition = String.format( "\"%s\" = %s", colName, condition );
-                    joiner.add( condition );
-                }
-            }
-        } catch ( UnknownTableException | UnknownDatabaseException | UnknownSchemaException e ) {
-            throw new RuntimeException( "Error while deriving PK WHERE condition", e );
+        Map<Long, LogicalColumn> columns = Catalog.snapshot().rel().getColumns( table.id ).stream().collect( Collectors.toMap( c -> c.id, c -> c ) );
+        if ( columns.isEmpty() ) {
+            throw new GenericRuntimeException( "Table has no columns" );
         }
-        return " WHERE " + joiner.toString();
+
+        LogicalPrimaryKey pk = Catalog.snapshot().rel().getPrimaryKey( table.primaryKey ).orElseThrow();
+        for ( long colId : pk.fieldIds ) {
+            LogicalColumn col = columns.get( colId );
+            String condition;
+            if ( filter.containsKey( col.name ) ) {
+                String val = filter.get( col.name );
+
+                condition = uiValueToSql( val, col.type, col.collectionsType );
+                condition = String.format( "\"%s\" = %s", col.name, condition );
+                joiner.add( condition );
+            }
+        }
+        return " WHERE " + joiner;
     }
 
 
     /**
      * Delete a row from a table. The row is determined by the value of every PK column in that row (conjunction).
      */
-    Result deleteRow( final Request req, final Response res ) {
-        UIRequest request = this.gson.fromJson( req.body(), UIRequest.class );
-        Transaction transaction = getTransaction();
-        Result result;
-        StringBuilder builder = new StringBuilder();
-        String[] t = request.tableId.split( "\\." );
-        String tableId = String.format( "\"%s\".\"%s\"", t[0], t[1] );
+    void deleteTuple( final Context ctx ) {
+        UIRequest request = ctx.bodyAsClass( UIRequest.class );
 
-        builder.append( "DELETE FROM " ).append( tableId ).append( computeWherePK( t[0], t[1], request.data ) );
-        try {
-            int numOfRows = executeSqlUpdate( transaction, builder.toString() );
-            if ( isActiveTracking ) {
-                transaction.addChangedTable( tableId );
-            }
+        StringBuilder query = new StringBuilder();
 
-            transaction.commit();
-            result = new Result( numOfRows );
-        } catch ( TransactionException | Exception e ) {
-            log.error( "Caught exception while deleting a row", e );
-            result = new Result( e ).setGeneratedQuery( builder.toString() );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
-        return result;
+        String tableId = getFullEntityName( request.entityId );
+        LogicalTable table = Catalog.snapshot().rel().getTable( request.entityId ).orElseThrow();
+
+        query.append( "DELETE FROM " ).append( tableId ).append( computeWherePK( table, request.data ) );
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> result = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query.toString() )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+
+        ctx.json( result );
     }
 
 
     /**
      * Update a row from a table. The row is determined by the value of every PK column in that row (conjunction).
      */
-    Result updateRow( final Request req, final Response res ) {
-        initMultipart( req );
-        String tableId;
-        Map<String, String> oldValues;
+    void updateTuple( final Context ctx ) throws ServletException, IOException {
+        ctx.contentType( "multipart/form-data" );
+        initMultipart( ctx );
+        Map<String, String> oldValues = null;
+        long entityId = Long.parseLong( Objects.requireNonNull( ctx.formParam( "entityId" ) ) );
         try {
-            tableId = new BufferedReader( new InputStreamReader( req.raw().getPart( "tableId" ).getInputStream(), StandardCharsets.UTF_8 ) ).lines().collect( Collectors.joining( System.lineSeparator() ) );
-            String _oldValues = new BufferedReader( new InputStreamReader( req.raw().getPart( "oldValues" ).getInputStream(), StandardCharsets.UTF_8 ) ).lines().collect( Collectors.joining( System.lineSeparator() ) );
+            String _oldValues = new BufferedReader( new InputStreamReader( ctx.req.getPart( "oldValues" ).getInputStream(), StandardCharsets.UTF_8 ) ).lines().collect( Collectors.joining( System.lineSeparator() ) );
             oldValues = gson.fromJson( _oldValues, Map.class );
         } catch ( IOException | ServletException e ) {
-            return new Result( e );
+            ctx.json( RelationalResult.builder().error( e.getMessage() ).build() );
         }
-
-        String[] split = tableId.split( "\\." );
-        tableId = String.format( "\"%s\".\"%s\"", split[0], split[1] );
+        String fullName = getFullEntityName( entityId );
 
         Transaction transaction = getTransaction();
         Statement statement = transaction.createStatement();
         StringJoiner setStatements = new StringJoiner( ",", "", "" );
 
-        List<CatalogColumn> catalogColumns = catalog.getColumns( new Catalog.Pattern( "APP" ), new Catalog.Pattern( split[0] ), new Catalog.Pattern( split[1] ), null );
-        try {
-            int i = 0;
-            for ( CatalogColumn catalogColumn : catalogColumns ) {
-                Part part = req.raw().getPart( catalogColumn.name );
-                if ( part == null ) {
-                    continue;
-                }
-                if ( part.getSubmittedFileName() == null ) {
-                    String value = new BufferedReader( new InputStreamReader( part.getInputStream(), StandardCharsets.UTF_8 ) ).lines().collect( Collectors.joining( System.lineSeparator() ) );
-                    String parsed = gson.fromJson( value, String.class );
-                    if ( parsed == null ) {
-                        setStatements.add( String.format( "\"%s\" = NULL", catalogColumn.name ) );
-                    } else {
-                        setStatements.add( String.format( "\"%s\" = %s", catalogColumn.name, uiValueToSql( parsed, catalogColumn.type, catalogColumn.collectionsType ) ) );
-                    }
+        List<LogicalColumn> logicalColumns = Catalog.snapshot().rel().getColumns( entityId );
+
+        int i = 0;
+        for ( LogicalColumn logicalColumn : logicalColumns ) {
+            Part part = ctx.req.getPart( logicalColumn.name );
+            if ( part == null ) {
+                continue;
+            }
+            if ( part.getSubmittedFileName() == null ) {
+                String value = new BufferedReader( new InputStreamReader( part.getInputStream(), StandardCharsets.UTF_8 ) ).lines().collect( Collectors.joining( System.lineSeparator() ) );
+                String parsed = gson.fromJson( value, String.class );
+                if ( parsed == null ) {
+                    setStatements.add( String.format( "\"%s\" = NULL", logicalColumn.name ) );
                 } else {
-                    setStatements.add( String.format( "\"%s\" = ?", catalogColumn.name ) );
-                    FileInputHandle fih = new FileInputHandle( statement, part.getInputStream() );
-                    statement.getDataContext().addParameterValues( i++, null, ImmutableList.of( fih ) );
+                    setStatements.add( String.format( "\"%s\" = %s", logicalColumn.name, uiValueToSql( parsed, logicalColumn.type, logicalColumn.collectionsType ) ) );
                 }
-            }
-        } catch ( IOException | ServletException e ) {
-            return new Result( e );
-        }
-
-        StringBuilder builder = new StringBuilder();
-        builder.append( "UPDATE " ).append( tableId ).append( " SET " ).append( setStatements.toString() ).append( computeWherePK( split[0], split[1], oldValues ) );
-
-        Result result;
-        try {
-            int numOfRows = executeSqlUpdate( statement, transaction, builder.toString() );
-
-            if ( numOfRows == 1 ) {
-                if ( isActiveTracking ) {
-                    transaction.addChangedTable( tableId );
-                }
-                transaction.commit();
-                result = new Result( numOfRows );
             } else {
-                transaction.rollback();
-                result = new Result( "Attempt to update " + numOfRows + " rows was blocked." );
-                result.setGeneratedQuery( builder.toString() );
-            }
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Caught exception while updating a row", e );
-            result = new Result( e ).setGeneratedQuery( builder.toString() );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
+                setStatements.add( String.format( "\"%s\" = ?", logicalColumn.name ) );
+                FileInputHandle fih = new FileInputHandle( statement, part.getInputStream() );
+                statement.getDataContext().addParameterValues( i++, logicalColumn.getAlgDataType( transaction.getTypeFactory() ), ImmutableList.of( PolyBlob.of( fih.getData() ) ) );
             }
         }
-        return result;
+
+        String query = "UPDATE "
+                + fullName
+                + " SET "
+                + setStatements
+                + computeWherePK( Catalog.snapshot().rel().getTable( logicalColumns.get( 0 ).tableId ).orElseThrow(), oldValues );
+
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> result = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .statement( statement )
+                        .transactions( List.of( transaction ) )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+
+        ctx.json( result );
     }
 
 
-    Result batchUpdate( final Request req, final Response res ) {
-        initMultipart( req );
+    void batchUpdate( final Context ctx ) throws ServletException, IOException {
+        ctx.contentType( "multipart/form-data" );
+        initMultipart( ctx );
         BatchUpdateRequest request;
-        try {
-            String jsonRequest = new BufferedReader( new InputStreamReader( req.raw().getPart( "request" ).getInputStream(), StandardCharsets.UTF_8 ) ).lines().collect( Collectors.joining( System.lineSeparator() ) );
-            request = gson.fromJson( jsonRequest, BatchUpdateRequest.class );
-        } catch ( IOException | ServletException e ) {
-            log.error( "Could not parse batch update request", e );
-            return new Result( e );
-        }
+
+        String jsonRequest = new BufferedReader( new InputStreamReader( ctx.req.getPart( "request" ).getInputStream(), StandardCharsets.UTF_8 ) ).lines().collect( Collectors.joining( System.lineSeparator() ) );
+        request = gson.fromJson( jsonRequest, BatchUpdateRequest.class );
+
         Transaction transaction = getTransaction();
         Statement statement;
-        int totalRows = 0;
-        try {
-            for ( Update update : request.updates ) {
-                statement = transaction.createStatement();
-                String query = update.getQuery( request.tableId, statement, req.raw() );
-                totalRows += executeSqlUpdate( statement, transaction, query );
-            }
-            transaction.commit();
-            return new Result( totalRows );
-        } catch ( ServletException | IOException | QueryExecutionException | TransactionException e ) {
-            try {
-                transaction.rollback();
-            } catch ( TransactionException transactionException ) {
-                log.error( "Could not rollback", e );
-                return new Result( e );
-            }
-            log.error( "The batch update failed", e );
-            return new Result( e );
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        List<Result<?, ?>> results = new ArrayList<>();
+        for ( Update update : request.updates ) {
+            statement = transaction.createStatement();
+            String query = update.getQuery( request.tableId, statement, ctx.req );
+
+            results.add( LanguageCrud.anyQueryResult(
+                    QueryContext.builder()
+                            .query( query )
+                            .language( language )
+                            .origin( ORIGIN )
+                            .transactionManager( transactionManager )
+                            .build(), UIRequest.builder().build() ).get( 0 ) );
         }
+        ctx.json( results );
     }
 
 
     /**
      * Get the columns of a table
      */
-    Result getColumns( final Request req, final Response res ) {
-        UIRequest request = this.gson.fromJson( req.body(), UIRequest.class );
-        Result result;
+    void getColumns( final Context ctx ) {
+        UIRequest request = ctx.bodyAsClass( UIRequest.class );
+        List<UiColumnDefinition> cols = new ArrayList<>();
 
-        String[] t = request.tableId.split( "\\." );
-        ArrayList<DbColumn> cols = new ArrayList<>();
-
-        try {
-            CatalogTable catalogTable = catalog.getTable( databaseName, t[0], t[1] );
-            ArrayList<String> primaryColumns;
-            if ( catalogTable.primaryKey != null ) {
-                CatalogPrimaryKey primaryKey = catalog.getPrimaryKey( catalogTable.primaryKey );
-                primaryColumns = new ArrayList<>( primaryKey.getColumnNames() );
-            } else {
-                primaryColumns = new ArrayList<>();
-            }
-            for ( CatalogColumn catalogColumn : catalog.getColumns( catalogTable.id ) ) {
-                String defaultValue = catalogColumn.defaultValue == null ? null : catalogColumn.defaultValue.value;
-                String collectionsType = catalogColumn.collectionsType == null ? "" : catalogColumn.collectionsType.getName();
-                cols.add(
-                        new DbColumn(
-                                catalogColumn.name,
-                                catalogColumn.type.getName(),
-                                collectionsType,
-                                catalogColumn.nullable,
-                                catalogColumn.length,
-                                catalogColumn.scale,
-                                catalogColumn.dimension,
-                                catalogColumn.cardinality,
-                                primaryColumns.contains( catalogColumn.name ),
-                                defaultValue ) );
-            }
-            result = new Result( cols.toArray( new DbColumn[0] ), null );
-            if ( catalogTable.tableType == TableType.TABLE ) {
-                result.setType( ResultType.TABLE );
-            } else {
-                result.setType( ResultType.VIEW );
-            }
-        } catch ( UnknownTableException | UnknownDatabaseException | UnknownSchemaException e ) {
-            log.error( "Caught exception while getting a column", e );
-            result = new Result( e );
+        LogicalTable table = Catalog.snapshot().rel().getTable( request.entityId ).orElseThrow();
+        List<String> primaryColumns;
+        if ( table.primaryKey != null ) {
+            LogicalPrimaryKey primaryKey = Catalog.snapshot().rel().getPrimaryKey( table.primaryKey ).orElseThrow();
+            primaryColumns = new ArrayList<>( primaryKey.getFieldNames() );
+        } else {
+            primaryColumns = new ArrayList<>();
+        }
+        for ( LogicalColumn logicalColumn : Catalog.snapshot().rel().getColumns( table.id ) ) {
+            String defaultValue = logicalColumn.defaultValue == null ? null : logicalColumn.defaultValue.value.toJson();
+            String collectionsType = logicalColumn.collectionsType == null ? "" : logicalColumn.collectionsType.getName();
+            cols.add(
+                    UiColumnDefinition.builder()
+                            .name( logicalColumn.name )
+                            .dataType( logicalColumn.type.getName() )
+                            .collectionsType( collectionsType )
+                            .nullable( logicalColumn.nullable )
+                            .precision( logicalColumn.length )
+                            .scale( logicalColumn.scale )
+                            .dimension( logicalColumn.dimension )
+                            .cardinality( logicalColumn.cardinality )
+                            .primary( primaryColumns.contains( logicalColumn.name ) )
+                            .defaultValue( defaultValue )
+                            .build() );
+        }
+        RelationalResultBuilder<?, ?> result = RelationalResult
+                .builder()
+                .header( cols.toArray( new UiColumnDefinition[0] ) );
+        if ( table.entityType == EntityType.ENTITY ) {
+            result.type( ResultType.TABLE );
+        } else if ( table.entityType == EntityType.MATERIALIZED_VIEW ) {
+            result.type( ResultType.MATERIALIZED );
+        } else {
+            result.type( ResultType.VIEW );
         }
 
-        return result;
+        ctx.json( result.build() );
     }
 
 
-    Result getDataSourceColumns( final Request req, final Response res ) {
-        UIRequest request = this.gson.fromJson( req.body(), UIRequest.class );
-        try {
-            CatalogTable catalogTable = catalog.getTable( "APP", request.getSchemaName(), request.getTableName() );
+    void getDataSourceColumns( final Context ctx ) {
+        UIRequest request = ctx.bodyAsClass( UIRequest.class );
 
-            if ( catalogTable.tableType == TableType.VIEW ) {
-                Map<Long, List<Long>> underlyingTable = ((CatalogView) catalogTable).getUnderlyingTables();
+        LogicalTable table = Catalog.snapshot().rel().getTable( request.entityId ).orElseThrow();
 
-                List<DbColumn> columns = new ArrayList<>();
-                for ( Long columnIds : catalogTable.columnIds ) {
-                    CatalogColumn col = catalog.getColumn( columnIds );
-                    columns.add( new DbColumn(
-                            col.name,
-                            col.type.getName(),
-                            col.collectionsType == null ? "" : col.collectionsType.getName(),
-                            col.nullable,
-                            col.length,
-                            col.scale,
-                            col.dimension,
-                            col.cardinality,
-                            false,
-                            col.defaultValue == null ? null : col.defaultValue.value
-                    ).setPhysicalName( col.name ) );
+        if ( table.entityType == EntityType.VIEW ) {
 
-                }
-                return new Result( columns.toArray( new DbColumn[0] ), null ).setType( ResultType.VIEW );
-            } else {
-                if ( catalog.getColumnPlacements( catalogTable.columnIds.get( 0 ) ).size() != 1 ) {
-                    throw new RuntimeException( "The table has an unexpected number of placements!" );
-                }
+            List<UiColumnDefinition> columns = new ArrayList<>();
+            List<LogicalColumn> cols = Catalog.snapshot().rel().getColumns( table.id );
+            for ( LogicalColumn col : cols ) {
+                columns.add( UiColumnDefinition.builder()
+                        .name( col.name )
+                        .dataType( col.type.getName() )
+                        .collectionsType( col.collectionsType == null ? "" : col.collectionsType.getName() )
+                        .nullable( col.nullable )
+                        .precision( col.length )
+                        .scale( col.scale )
+                        .dimension( col.dimension )
+                        .cardinality( col.cardinality )
+                        .primary( false )
+                        .defaultValue( col.defaultValue == null ? null : col.defaultValue.value.toJson() )
+                        .build()
+                );
 
-                int adapterId = catalog.getColumnPlacements( catalogTable.columnIds.get( 0 ) ).get( 0 ).adapterId;
-                CatalogPrimaryKey primaryKey = catalog.getPrimaryKey( catalogTable.primaryKey );
-                List<String> pkColumnNames = primaryKey.getColumnNames();
-                List<DbColumn> columns = new ArrayList<>();
-                for ( CatalogColumnPlacement ccp : catalog.getColumnPlacementsOnAdapter( adapterId, catalogTable.id ) ) {
-                    CatalogColumn col = catalog.getColumn( ccp.columnId );
-                    columns.add( new DbColumn(
-                            col.name,
-                            col.type.getName(),
-                            col.collectionsType == null ? "" : col.collectionsType.getName(),
-                            col.nullable,
-                            col.length,
-                            col.scale,
-                            col.dimension,
-                            col.cardinality,
-                            pkColumnNames.contains( col.name ),
-                            col.defaultValue == null ? null : col.defaultValue.value
-                    ).setPhysicalName( ccp.physicalColumnName ) );
-                }
-                return new Result( columns.toArray( new DbColumn[0] ), null ).setType( ResultType.VIEW );
             }
-        } catch ( UnknownDatabaseException | UnknownSchemaException | UnknownTableException e ) {
-            return new Result( e );
+            ctx.json( RelationalResult.builder().header( columns.toArray( new UiColumnDefinition[0] ) ).type( ResultType.VIEW ).build() );
+        } else {
+            List<AllocationEntity> allocs = Catalog.snapshot().alloc().getFromLogical( table.id );
+            if ( Catalog.snapshot().alloc().getFromLogical( table.id ).size() != 1 ) {
+                throw new GenericRuntimeException( "The table has an unexpected number of placements!" );
+            }
+
+            long adapterId = allocs.get( 0 ).adapterId;
+            LogicalPrimaryKey primaryKey = Catalog.snapshot().rel().getPrimaryKey( table.primaryKey ).orElseThrow();
+            List<String> pkColumnNames = primaryKey.getFieldNames();
+            List<UiColumnDefinition> columns = new ArrayList<>();
+            for ( AllocationColumn ccp : Catalog.snapshot().alloc().getColumnPlacementsOnAdapterPerEntity( adapterId, table.id ) ) {
+                LogicalColumn col = Catalog.snapshot().rel().getColumn( ccp.columnId ).orElseThrow();
+                columns.add( UiColumnDefinition.builder()
+                        .name( col.name )
+                        .dataType( col.type.getName() )
+                        .collectionsType( col.collectionsType == null ? "" : col.collectionsType.getName() ).nullable( col.nullable )
+                        .precision( col.length )
+                        .scale( col.scale )
+                        .dimension( col.dimension )
+                        .cardinality( col.cardinality )
+                        .primary( pkColumnNames.contains( col.name ) )
+                        .defaultValue( col.defaultValue == null ? null : col.defaultValue.value.toJson() ).build() );
+            }
+            ctx.json( RelationalResult.builder().header( columns.toArray( new UiColumnDefinition[0] ) ).type( ResultType.TABLE ).build() );
         }
     }
 
 
     /**
-     * Get the exported tables of a DataSource that a table originates from
+     * Get additional columns of the DataSource that are not mapped to the table.
      */
-    Result[] getExportedColumns( final Request req, final Response res ) {
-        UIRequest request = this.gson.fromJson( req.body(), UIRequest.class );
-        try {
-            ImmutableMap<Integer, ImmutableList<Long>> placements = catalog.getTable( "APP", request.getSchemaName(), request.getTableName() ).placementsByAdapter;
-            Set<Integer> adapterIds = placements.keySet();
-            if ( adapterIds.size() > 1 ) {
-                log.warn( String.format( "The number of DataSources of a Table should not be > 1 (%s.%s)", request.getSchemaName(), request.getTableName() ) );
-            }
-            List<Result> exportedColumns = new ArrayList<>();
-            for ( int adapterId : adapterIds ) {
-                Adapter adapter = AdapterManager.getInstance().getAdapter( adapterId );
-                if ( adapter instanceof DataSource ) {
-                    DataSource dataSource = (DataSource) adapter;
-                    for ( Entry<String, List<ExportedColumn>> entry : dataSource.getExportedColumns().entrySet() ) {
-                        List<DbColumn> columnList = new ArrayList<>();
-                        for ( ExportedColumn col : entry.getValue() ) {
-                            DbColumn dbCol = new DbColumn(
-                                    col.name,
-                                    col.type.getName(),
-                                    col.collectionsType == null ? "" : col.collectionsType.getName(),
-                                    col.nullable,
-                                    col.length,
-                                    col.scale,
-                                    col.dimension,
-                                    col.cardinality,
-                                    col.primary,
-                                    null ).setPhysicalName( col.physicalColumnName );
-                            columnList.add( dbCol );
-                        }
-                        exportedColumns.add( new Result( columnList.toArray( new DbColumn[0] ), null ).setTable( entry.getKey() ) );
-                        columnList.clear();
-                    }
-                    return exportedColumns.toArray( new Result[0] );
-                } else {
-                    //log.warn( "This method should only be called for tables that originate from a DataSource" );
-                }
-            }
-        } catch ( UnknownTableException | UnknownDatabaseException | UnknownSchemaException e ) {
-            return new Result[]{ new Result( e ) };
+    void getAvailableSourceColumns( final Context ctx ) {
+        UIRequest request = ctx.bodyAsClass( UIRequest.class );
+
+        LogicalTable table = Catalog.snapshot().rel().getTable( request.entityId ).orElseThrow();
+        Map<Long, List<Long>> placements = Catalog.snapshot().alloc().getColumnPlacementsByAdapters( table.id );
+        Set<Long> adapterIds = placements.keySet();
+        if ( adapterIds.size() > 1 ) {
+            LogicalNamespace namespace = Catalog.snapshot().getNamespace( table.namespaceId ).orElseThrow();
+            log.warn( String.format( "The number of sources of an entity should not be > 1 (%s.%s)", namespace.name, table.name ) );
         }
-        return new Result[]{ new Result( "Could not retrieve exported Columns." ) };
+        List<RelationalResult> exportedColumns = new ArrayList<>();
+        for ( Long adapterId : adapterIds ) {
+            Adapter<?> adapter = AdapterManager.getInstance().getAdapter( adapterId ).orElseThrow();
+            if ( adapter instanceof DataSource<?> dataSource ) {
+                for ( Entry<String, List<ExportedColumn>> entry : dataSource.getExportedColumns().entrySet() ) {
+                    List<UiColumnDefinition> columnList = new ArrayList<>();
+                    for ( ExportedColumn col : entry.getValue() ) {
+                        UiColumnDefinition dbCol = UiColumnDefinition.builder()
+                                .name( col.name )
+                                .dataType( col.type.getName() )
+                                .collectionsType( col.collectionsType == null ? "" : col.collectionsType.getName() )
+                                .nullable( col.nullable )
+                                .precision( col.length )
+                                .scale( col.scale )
+                                .dimension( col.dimension )
+                                .cardinality( col.cardinality )
+                                .primary( col.primary )
+                                .build();
+                        columnList.add( dbCol );
+                    }
+                    exportedColumns.add( RelationalResult.builder().header( columnList.toArray( new UiColumnDefinition[0] ) ).table( entry.getKey() ).build() );
+                    columnList.clear();
+                }
+                ctx.json( exportedColumns.toArray( new RelationalResult[0] ) );
+                return;
+            }
+
+        }
+
+        ctx.json( RelationalResult.builder().error( "Could not retrieve exported source fields." ).build() );
     }
 
 
-    Result updateColumn( final Request req, final Response res ) {
-        ColumnRequest request = this.gson.fromJson( req.body(), ColumnRequest.class );
-        Transaction transaction = getTransaction();
+    void getMaterializedInfo( final Context ctx ) {
+        EditTableRequest request = ctx.bodyAsClass( EditTableRequest.class );
+        Pair<LogicalNamespace, LogicalTable> namespaceTable = getNamespaceTable( request );
 
-        DbColumn oldColumn = request.oldColumn;
-        DbColumn newColumn = request.newColumn;
-        Result result;
-        ArrayList<String> queries = new ArrayList<>();
+        LogicalTable table = getLogicalTable( namespaceTable.left.name, namespaceTable.right.name );
+
+        if ( table.entityType == EntityType.MATERIALIZED_VIEW ) {
+            LogicalMaterializedView logicalMaterializedView = (LogicalMaterializedView) table;
+
+            MaterializedCriteria materializedCriteria = logicalMaterializedView.getMaterializedCriteria();
+
+            ArrayList<String> materializedInfo = new ArrayList<>();
+            materializedInfo.add( materializedCriteria.getCriteriaType().toString() );
+            materializedInfo.add( materializedCriteria.getLastUpdate().toString() );
+            if ( materializedCriteria.getCriteriaType() == CriteriaType.INTERVAL ) {
+                materializedInfo.add( materializedCriteria.getInterval().toString() );
+                materializedInfo.add( materializedCriteria.getTimeUnit().name() );
+            } else if ( materializedCriteria.getCriteriaType() == CriteriaType.UPDATE ) {
+                materializedInfo.add( materializedCriteria.getInterval().toString() );
+                materializedInfo.add( "" );
+            } else {
+                materializedInfo.add( "" );
+                materializedInfo.add( "" );
+            }
+
+            ctx.json( new MaterializedInfos( materializedInfo ) );
+        } else {
+            throw new GenericRuntimeException( "only possible with materialized views" );
+        }
+    }
+
+
+    private LogicalTable getLogicalTable( String namespace, String table ) {
+        return Catalog.snapshot().rel().getTable( namespace, table ).orElseThrow();
+    }
+
+
+    void updateMaterialized( final Context ctx ) {
+        UIRequest request = ctx.bodyAsClass( UIRequest.class );
+
+        List<String> queries = new ArrayList<>();
         StringBuilder sBuilder = new StringBuilder();
 
-        String[] t = request.tableId.split( "\\." );
-        String tableId = String.format( "\"%s\".\"%s\"", t[0], t[1] );
+        String tableId = getFullEntityName( request.entityId );
+
+        String query = String.format( "ALTER MATERIALIZED VIEW %s FRESHNESS MANUAL", tableId );
+        queries.add( query );
+
+        for ( String q : queries ) {
+            sBuilder.append( q );
+
+            QueryLanguage language = QueryLanguage.from( "sql" );
+            Result<?, ?> result = LanguageCrud.anyQueryResult(
+                    QueryContext.builder()
+                            .query( query )
+                            .language( language )
+                            .origin( ORIGIN )
+                            .transactionManager( transactionManager )
+                            .build(), UIRequest.builder().build() ).get( 0 );
+            ctx.json( result );
+
+        }
+    }
+
+
+    void updateColumn( final Context ctx ) {
+        ColumnRequest request = ctx.bodyAsClass( ColumnRequest.class );
+
+        UiColumnDefinition oldColumn = request.oldColumn;
+        UiColumnDefinition newColumn = request.newColumn;
+        List<String> queries = new ArrayList<>();
+        StringBuilder sBuilder = new StringBuilder();
+
+        String tableId = getFullEntityName( request.entityId );
 
         // rename column if needed
         if ( !oldColumn.name.equals( newColumn.name ) ) {
-            String query = String.format( "ALTER TABLE %s RENAME COLUMN \"%s\" TO \"%s\"", tableId, oldColumn.name, newColumn.name );
+            String query;
+            if ( request.tableType.equals( "VIEW" ) ) {
+                query = String.format( "ALTER VIEW %s RENAME COLUMN \"%s\" TO \"%s\"", tableId, oldColumn.name, newColumn.name );
+            } else if ( request.tableType.equals( "MATERIALIZED" ) ) {
+                query = String.format( "ALTER MATERIALIZED VIEW %s RENAME COLUMN \"%s\" TO \"%s\"", tableId, oldColumn.name, newColumn.name );
+            } else {
+                query = String.format( "ALTER TABLE %s RENAME COLUMN \"%s\" TO \"%s\"", tableId, oldColumn.name, newColumn.name );
+            }
             queries.add( query );
         }
 
@@ -1489,7 +1200,7 @@ public class Crud implements InformationObserver {
             // change type + length
             // TODO: cast if needed
             if ( !oldColumn.dataType.equals( newColumn.dataType ) ||
-                    !oldColumn.collectionsType.equals( newColumn.collectionsType ) ||
+                    !Objects.equals( oldColumn.collectionsType, newColumn.collectionsType ) ||
                     !Objects.equals( oldColumn.precision, newColumn.precision ) ||
                     !Objects.equals( oldColumn.scale, newColumn.scale ) ||
                     !oldColumn.dimension.equals( newColumn.dimension ) ||
@@ -1504,7 +1215,7 @@ public class Crud implements InformationObserver {
                     query = query + ")";
                 }
                 //collectionType
-                if ( !newColumn.collectionsType.equals( "" ) ) {
+                if ( newColumn.collectionsType != null && !newColumn.collectionsType.isEmpty() ) {
                     query = query + " " + request.newColumn.collectionsType;
                     int dimension = newColumn.dimension == null ? -1 : newColumn.dimension;
                     int cardinality = newColumn.cardinality == null ? -1 : newColumn.cardinality;
@@ -1524,7 +1235,7 @@ public class Crud implements InformationObserver {
             }
 
             // change default value
-            if ( oldColumn.defaultValue == null || newColumn.defaultValue == null || !oldColumn.defaultValue.equals( newColumn.defaultValue ) ) {
+            if ( !Objects.equals( oldColumn.defaultValue, newColumn.defaultValue ) ) {
                 String query;
                 if ( newColumn.defaultValue == null ) {
                     query = String.format( "ALTER TABLE %s MODIFY COLUMN \"%s\" DROP DEFAULT", tableId, newColumn.name );
@@ -1545,9 +1256,9 @@ public class Crud implements InformationObserver {
                             case "FLOAT":
                             case "SMALLINT":
                             case "TINYINT":
-                                request.newColumn.defaultValue = request.newColumn.defaultValue.replace( ",", "." );
-                                BigDecimal b = new BigDecimal( request.newColumn.defaultValue );
-                                query = query + b.toString();
+                                String defaultValue = request.newColumn.defaultValue.replace( ",", "." );
+                                BigDecimal b = new BigDecimal( defaultValue );
+                                query = query + b;
                                 break;
                             case "VARCHAR":
                                 query = query + String.format( "'%s'", request.newColumn.defaultValue );
@@ -1561,37 +1272,31 @@ public class Crud implements InformationObserver {
             }
         }
 
-        result = new Result( 1 ).setGeneratedQuery( queries.toString() );
-        try {
-            for ( String query : queries ) {
-                sBuilder.append( query );
-                executeSqlUpdate( transaction, query );
-            }
-            transaction.commit();
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Caught exception while updating a column", e );
-            result = new Result( e ).setAffectedRows( 0 ).setGeneratedQuery( sBuilder.toString() );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException e2 ) {
-                log.error( "Caught exception during rollback", e2 );
-                result = new Result( e2 ).setAffectedRows( 0 ).setGeneratedQuery( sBuilder.toString() );
+        for ( String query : queries ) {
+            sBuilder.append( query );
+            QueryLanguage language = QueryLanguage.from( "sql" );
+            Result<?, ?> result = LanguageCrud.anyQueryResult(
+                    QueryContext.builder()
+                            .query( query )
+                            .language( language )
+                            .origin( ORIGIN )
+                            .transactionManager( transactionManager )
+                            .build(), UIRequest.builder().build() ).get( 0 );
+            ctx.json( result );
+            if ( result.error != null ) {
+                break;
             }
         }
-
-        return result;
     }
 
 
     /**
      * Add a column to an existing table
      */
-    Result addColumn( final Request req, final Response res ) {
-        ColumnRequest request = this.gson.fromJson( req.body(), ColumnRequest.class );
-        Transaction transaction = getTransaction();
+    void addColumn( final Context ctx ) {
+        ColumnRequest request = ctx.bodyAsClass( ColumnRequest.class );
 
-        String[] t = request.tableId.split( "\\." );
-        String tableId = String.format( "\"%s\".\"%s\"", t[0], t[1] );
+        String tableId = getFullEntityName( request.entityId );
 
         String as = "";
         String dataType = request.newColumn.dataType;
@@ -1610,7 +1315,7 @@ public class Crud implements InformationObserver {
                 }
                 query = query + ")";
             }
-            if ( !request.newColumn.collectionsType.equals( "" ) ) {
+            if ( request.newColumn.collectionsType != null && !request.newColumn.collectionsType.isEmpty() ) {
                 query = query + " " + request.newColumn.collectionsType;
                 int dimension = request.newColumn.dimension == null ? -1 : request.newColumn.dimension;
                 int cardinality = request.newColumn.cardinality == null ? -1 : request.newColumn.cardinality;
@@ -1620,9 +1325,9 @@ public class Crud implements InformationObserver {
                 query = query + " NOT NULL";
             }
         }
-        if ( request.newColumn.defaultValue != null && !request.newColumn.defaultValue.equals( "" ) ) {
+        if ( request.newColumn.defaultValue != null && !request.newColumn.defaultValue.isEmpty() ) {
             query = query + " DEFAULT ";
-            if ( request.newColumn.collectionsType != null && !request.newColumn.collectionsType.equals( "" ) ) {
+            if ( request.newColumn.collectionsType != null && !request.newColumn.collectionsType.isEmpty() ) {
                 //handle the case if the user says "ARRAY[1,2,3]" or "[1,2,3]"
                 if ( !request.newColumn.defaultValue.startsWith( request.newColumn.collectionsType ) ) {
                     query = query + request.newColumn.collectionsType;
@@ -1637,9 +1342,9 @@ public class Crud implements InformationObserver {
                     case "FLOAT":
                     case "DOUBLE":
                     case "DECIMAL":
-                        request.newColumn.defaultValue = request.newColumn.defaultValue.replace( ",", "." );
-                        BigDecimal b = new BigDecimal( request.newColumn.defaultValue );
-                        query = query + b.toString();
+                        String defaultValue = request.newColumn.defaultValue.replace( ",", "." );
+                        BigDecimal b = new BigDecimal( defaultValue );
+                        query = query + b;
                         break;
                     case "VARCHAR":
                         query = query + String.format( "'%s'", request.newColumn.defaultValue );
@@ -1649,382 +1354,329 @@ public class Crud implements InformationObserver {
                 }
             }
         }
-        Result result;
-        try {
-            int affectedRows = executeSqlUpdate( transaction, query );
-            transaction.commit();
-            result = new Result( affectedRows ).setGeneratedQuery( query );
-        } catch ( TransactionException | QueryExecutionException e ) {
-            log.error( "Caught exception while adding a column", e );
-            result = new Result( e );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
-        return result;
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
     }
 
 
     /**
      * Delete a column of a table
      */
-    Result dropColumn( final Request req, final Response res ) {
-        ColumnRequest request = this.gson.fromJson( req.body(), ColumnRequest.class );
-        Transaction transaction = getTransaction();
+    void dropColumn( final Context ctx ) {
+        ColumnRequest request = ctx.bodyAsClass( ColumnRequest.class );
 
-        String[] t = request.tableId.split( "\\." );
-        String tableId = String.format( "\"%s\".\"%s\"", t[0], t[1] );
-
-        Result result;
+        String tableId = getFullEntityName( request.entityId );
         String query = String.format( "ALTER TABLE %s DROP COLUMN \"%s\"", tableId, request.oldColumn.name );
-        try {
-            int affectedRows = executeSqlUpdate( transaction, query );
-            transaction.commit();
-            result = new Result( affectedRows );
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Caught exception while dropping a column", e );
-            result = new Result( e );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
-        return result;
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
     }
 
 
     /**
      * Get artificially generated index/foreign key/constraint names for placeholders in the UI
      */
-    Result getGeneratedNames( final Request req, final Response res ) {
+    void getGeneratedNames( final Context ctx ) {
         String[] data = new String[3];
         data[0] = NameGenerator.generateConstraintName();
         data[1] = NameGenerator.generateForeignKeyName();
         data[2] = NameGenerator.generateIndexName();
-        return new Result( new DbColumn[0], new String[][]{ data } );
+        ctx.json( RelationalResult.builder().header( new UiColumnDefinition[0] ).data( new String[][]{ data } ).build() );
     }
 
 
     /**
      * Get constraints of a table
      */
-    Result getConstraints( final Request req, final Response res ) {
-        UIRequest request = this.gson.fromJson( req.body(), UIRequest.class );
-        Result result;
+    void getConstraints( final Context ctx ) {
+        UIRequest request = ctx.bodyAsClass( UIRequest.class );
+        RelationalResult result;
 
-        String[] t = request.tableId.split( "\\." );
-        ArrayList<TableConstraint> resultList = new ArrayList<>();
-        Map<String, ArrayList<String>> temp = new HashMap<>();
+        List<TableConstraint> resultList = new ArrayList<>();
+        Map<String, List<String>> temp = new HashMap<>();
 
-        try {
-            CatalogTable catalogTable = catalog.getTable( databaseName, t[0], t[1] );
+        LogicalTable table = Catalog.snapshot().rel().getTable( request.entityId ).orElseThrow();
 
-            // get primary key
-            if ( catalogTable.primaryKey != null ) {
-                CatalogPrimaryKey primaryKey = catalog.getPrimaryKey( catalogTable.primaryKey );
-                for ( String columnName : primaryKey.getColumnNames() ) {
-                    if ( !temp.containsKey( "" ) ) {
-                        temp.put( "", new ArrayList<>() );
-                    }
-                    temp.get( "" ).add( columnName );
+        // get primary key
+        if ( table.primaryKey != null ) {
+            LogicalPrimaryKey primaryKey = Catalog.snapshot().rel().getPrimaryKey( table.primaryKey ).orElseThrow();
+            for ( String columnName : primaryKey.getFieldNames() ) {
+                if ( !temp.containsKey( "" ) ) {
+                    temp.put( "", new ArrayList<>() );
                 }
-                for ( Map.Entry<String, ArrayList<String>> entry : temp.entrySet() ) {
-                    resultList.add( new TableConstraint( entry.getKey(), "PRIMARY KEY", entry.getValue() ) );
-                }
+                temp.get( "" ).add( columnName );
             }
-
-            // get unique constraints.
-            temp.clear();
-            List<CatalogConstraint> constraints = catalog.getConstraints( catalogTable.id );
-            for ( CatalogConstraint catalogConstraint : constraints ) {
-                if ( catalogConstraint.type == ConstraintType.UNIQUE ) {
-                    temp.put( catalogConstraint.name, new ArrayList<>( catalogConstraint.key.getColumnNames() ) );
-                }
+            for ( Map.Entry<String, List<String>> entry : temp.entrySet() ) {
+                resultList.add( new TableConstraint( entry.getKey(), "PRIMARY KEY", entry.getValue() ) );
             }
-            for ( Map.Entry<String, ArrayList<String>> entry : temp.entrySet() ) {
-                resultList.add( new TableConstraint( entry.getKey(), "UNIQUE", entry.getValue() ) );
-            }
-
-            // the foreign keys are listed separately
-
-            DbColumn[] header = { new DbColumn( "Name" ), new DbColumn( "Type" ), new DbColumn( "Columns" ) };
-            ArrayList<String[]> data = new ArrayList<>();
-            resultList.forEach( c -> data.add( c.asRow() ) );
-
-            result = new Result( header, data.toArray( new String[0][2] ) );
-        } catch ( UnknownTableException | UnknownDatabaseException | UnknownSchemaException e ) {
-            log.error( "Caught exception while fetching constraints", e );
-            result = new Result( e );
         }
 
-        return result;
+        // get unique constraints.
+        temp.clear();
+        List<LogicalConstraint> constraints = Catalog.snapshot().rel().getConstraints( table.id );
+        for ( LogicalConstraint logicalConstraint : constraints ) {
+            if ( logicalConstraint.type == ConstraintType.UNIQUE ) {
+                temp.put( logicalConstraint.name, new ArrayList<>( logicalConstraint.key.getFieldNames() ) );
+            }
+        }
+        for ( Map.Entry<String, List<String>> entry : temp.entrySet() ) {
+            resultList.add( new TableConstraint( entry.getKey(), "UNIQUE", entry.getValue() ) );
+        }
+
+        // the foreign keys are listed separately
+
+        UiColumnDefinition[] header = { UiColumnDefinition.builder().name( "Name" ).build(), UiColumnDefinition.builder().name( "Type" ).build(), UiColumnDefinition.builder().name( "Columns" ).build() };
+        List<String[]> data = new ArrayList<>();
+        resultList.forEach( c -> data.add( c.asRow() ) );
+
+        result = RelationalResult.builder().header( header ).data( data.toArray( new String[0][2] ) ).build();
+
+        ctx.json( result );
     }
 
 
-    Result dropConstraint( final Request req, final Response res ) {
-        ConstraintRequest request = this.gson.fromJson( req.body(), ConstraintRequest.class );
-        Transaction transaction = getTransaction();
+    void dropConstraint( final Context ctx ) {
+        ConstraintRequest request = ctx.bodyAsClass( ConstraintRequest.class );
 
-        String[] t = request.table.split( "\\." );
-        String tableId = String.format( "\"%s\".\"%s\"", t[0], t[1] );
+        long entityId = request.entityId;
+        String fullEntityName = getFullEntityName( entityId );
 
+        String query = getDropConstraintQuery( request, fullEntityName );
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
+    }
+
+
+    private static String getDropConstraintQuery( ConstraintRequest request, String fullEntityName ) {
         String query;
-        if ( request.constraint.type.equals( "PRIMARY KEY" ) ) {
-            query = String.format( "ALTER TABLE %s DROP PRIMARY KEY", tableId );
-        } else if ( request.constraint.type.equals( "FOREIGN KEY" ) ) {
-            query = String.format( "ALTER TABLE %s DROP FOREIGN KEY \"%s\"", tableId, request.constraint.name );
+        if ( request.constraint.type.equals( ConstraintType.PRIMARY.name() ) ) {
+            query = String.format( "ALTER TABLE %s DROP PRIMARY KEY", fullEntityName );
+        } else if ( request.constraint.type.equals( ConstraintType.FOREIGN.name() ) ) {
+            query = String.format( "ALTER TABLE %s DROP FOREIGN KEY \"%s\"", fullEntityName, request.constraint.name );
         } else {
-            query = String.format( "ALTER TABLE %s DROP CONSTRAINT \"%s\"", tableId, request.constraint.name );
+            query = String.format( "ALTER TABLE %s DROP CONSTRAINT \"%s\"", fullEntityName, request.constraint.name );
         }
-        Result result;
-        try {
-            int rows = executeSqlUpdate( transaction, query );
-            transaction.commit();
-            result = new Result( rows );
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Caught exception while dropping a constraint", e );
-            result = new Result( e );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
-        return result;
+        return query;
     }
 
 
     /**
      * Add a primary key to a table
      */
-    Result addPrimaryKey( final Request req, final Response res ) {
-        ConstraintRequest request = this.gson.fromJson( req.body(), ConstraintRequest.class );
-        Transaction transaction = getTransaction();
+    void addPrimaryKey( final Context ctx ) {
+        ConstraintRequest request = ctx.bodyAsClass( ConstraintRequest.class );
 
-        String[] t = request.table.split( "\\." );
-        String tableId = String.format( "\"%s\".\"%s\"", t[0], t[1] );
+        long entityId = request.entityId;
+        String tableId = getFullEntityName( entityId );
 
-        Result result;
-        if ( request.constraint.columns.length > 0 ) {
-            StringJoiner joiner = new StringJoiner( ",", "(", ")" );
-            for ( String s : request.constraint.columns ) {
-                joiner.add( "\"" + s + "\"" );
-            }
-            String query = "ALTER TABLE " + tableId + " ADD PRIMARY KEY " + joiner.toString();
-            try {
-                int rows = executeSqlUpdate( transaction, query );
-                transaction.commit();
-                result = new Result( rows ).setGeneratedQuery( query );
-            } catch ( QueryExecutionException | TransactionException e ) {
-                log.error( "Caught exception while adding a primary key", e );
-                result = new Result( e );
-                try {
-                    transaction.rollback();
-                } catch ( TransactionException ex ) {
-                    log.error( "Could not rollback", ex );
-                }
-            }
-        } else {
-            result = new Result( "Cannot add primary key if no columns are provided." );
+        RelationalResult result;
+        if ( request.constraint.columns.length < 1 ) {
+            result = RelationalResult.builder().error( "Cannot add primary key if no columns are provided." ).build();
+            ctx.json( result );
+            return;
         }
-        return result;
+        StringJoiner joiner = new StringJoiner( ",", "(", ")" );
+        for ( String s : request.constraint.columns ) {
+            joiner.add( "\"" + s + "\"" );
+        }
+        String query = "ALTER TABLE " + tableId + " ADD PRIMARY KEY " + joiner;
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+
+        ctx.json( res );
     }
 
 
     /**
      * Add a primary key to a table
      */
-    Result addUniqueConstraint( final Request req, final Response res ) {
-        ConstraintRequest request = this.gson.fromJson( req.body(), ConstraintRequest.class );
-        Transaction transaction = getTransaction();
+    void addUniqueConstraint( final Context ctx ) {
+        ConstraintRequest request = ctx.bodyAsClass( ConstraintRequest.class );
 
-        String[] t = request.table.split( "\\." );
-        String tableId = String.format( "\"%s\".\"%s\"", t[0], t[1] );
+        long entityId = request.entityId;
+        String tableName = getFullEntityName( entityId );
 
-        Result result;
+        Result<?, ?> result;
         if ( request.constraint.columns.length > 0 ) {
             StringJoiner joiner = new StringJoiner( ",", "(", ")" );
             for ( String s : request.constraint.columns ) {
                 joiner.add( "\"" + s + "\"" );
             }
-            String query = "ALTER TABLE " + tableId + " ADD CONSTRAINT \"" + request.constraint.name + "\" UNIQUE " + joiner.toString();
-            try {
-                int rows = executeSqlUpdate( transaction, query );
-                transaction.commit();
-                result = new Result( rows ).setGeneratedQuery( query );
-            } catch ( QueryExecutionException | TransactionException e ) {
-                log.error( "Caught exception while adding a unique constraint", e );
-                result = new Result( e );
-                try {
-                    transaction.rollback();
-                } catch ( TransactionException ex ) {
-                    log.error( "Could not rollback", ex );
-                }
-            }
+            String query = "ALTER TABLE " + tableName + " ADD CONSTRAINT \"" + request.constraint.name + "\" UNIQUE " + joiner;
+            QueryLanguage language = QueryLanguage.from( "sql" );
+            result = LanguageCrud.anyQueryResult(
+                    QueryContext.builder()
+                            .query( query )
+                            .language( language )
+                            .origin( ORIGIN )
+                            .transactionManager( transactionManager )
+                            .build(), UIRequest.builder().build() ).get( 0 );
         } else {
-            result = new Result( "Cannot add unique constraint if no columns are provided." );
+            result = RelationalResult.builder().error( "Cannot add unique constraint if no columns are provided." ).build();
         }
-        return result;
+        ctx.json( result );
     }
 
 
     /**
      * Get indexes of a table
      */
-    Result getIndexes( final Request req, final Response res ) {
-        EditTableRequest request = this.gson.fromJson( req.body(), EditTableRequest.class );
-        Result result;
-        try {
-            CatalogTable catalogTable = catalog.getTable( databaseName, request.schema, request.table );
-            List<CatalogIndex> catalogIndexes = catalog.getIndexes( catalogTable.id, false );
+    void getIndexes( final Context ctx ) {
+        EditTableRequest request = ctx.bodyAsClass( EditTableRequest.class );
+        Pair<LogicalNamespace, LogicalTable> namespaceTable = getNamespaceTable( request );
 
-            DbColumn[] header = {
-                    new DbColumn( "Name" ),
-                    new DbColumn( "Columns" ),
-                    new DbColumn( "Location" ),
-                    new DbColumn( "Method" ),
-                    new DbColumn( "Type" ) };
+        LogicalTable table = getLogicalTable( namespaceTable.left.name, namespaceTable.right.name );
+        List<LogicalIndex> logicalIndices = Catalog.snapshot().rel().getIndexes( table.id, false );
 
-            ArrayList<String[]> data = new ArrayList<>();
+        UiColumnDefinition[] header = {
+                UiColumnDefinition.builder().name( "Name" ).build(),
+                UiColumnDefinition.builder().name( "Columns" ).build(),
+                UiColumnDefinition.builder().name( "Location" ).build(),
+                UiColumnDefinition.builder().name( "Method" ).build(),
+                UiColumnDefinition.builder().name( "Type" ).build() };
 
-            // Get explicit indexes
-            for ( CatalogIndex catalogIndex : catalogIndexes ) {
+        List<String[]> data = new ArrayList<>();
+
+        // Get explicit indexes
+        for ( LogicalIndex logicalIndex : logicalIndices ) {
+            String[] arr = new String[5];
+            String storeUniqueName;
+            if ( logicalIndex.location < 0 ) {
+                // a polystore index
+                storeUniqueName = "Polypheny-DB";
+            } else {
+                storeUniqueName = Catalog.snapshot().getAdapter( logicalIndex.location ).orElseThrow().uniqueName;
+            }
+            arr[0] = logicalIndex.name;
+            arr[1] = String.join( ", ", logicalIndex.key.getFieldNames() );
+            arr[2] = storeUniqueName;
+            arr[3] = logicalIndex.methodDisplayName;
+            arr[4] = logicalIndex.type.name();
+            data.add( arr );
+        }
+
+        // Get functional indexes
+        List<AllocationEntity> allocs = Catalog.snapshot().alloc().getFromLogical( table.id );
+        for ( AllocationEntity alloc : allocs ) {
+            Adapter<?> adapter = AdapterManager.getInstance().getAdapter( alloc.adapterId ).orElseThrow();
+            DataStore<?> store;
+            if ( adapter instanceof DataStore<?> ) {
+                store = (DataStore<?>) adapter;
+            } else {
+                break;
+            }
+            for ( FunctionalIndexInfo fif : store.getFunctionalIndexes( table ) ) {
                 String[] arr = new String[5];
-                String storeUniqueName;
-                if ( catalogIndex.location == 0 ) {
-                    // a polystore index
-                    storeUniqueName = "Polypheny-DB";
-                } else {
-                    storeUniqueName = catalog.getAdapter( catalogIndex.location ).uniqueName;
-                }
-                arr[0] = catalogIndex.name;
-                arr[1] = String.join( ", ", catalogIndex.key.getColumnNames() );
-                arr[2] = storeUniqueName;
-                arr[3] = catalogIndex.methodDisplayName;
-                arr[4] = catalogIndex.type.name();
+                arr[0] = "";
+                arr[1] = String.join( ", ", fif.getColumnNames() );
+                arr[2] = store.getUniqueName();
+                arr[3] = fif.methodDisplayName();
+                arr[4] = "FUNCTIONAL";
                 data.add( arr );
             }
-
-            // Get functional indexes
-            for ( Integer storeId : catalogTable.placementsByAdapter.keySet() ) {
-                Adapter adapter = AdapterManager.getInstance().getAdapter( storeId );
-                DataStore store;
-                if ( adapter instanceof DataStore ) {
-                    store = (DataStore) adapter;
-                } else {
-                    break;
-                }
-                for ( FunctionalIndexInfo fif : store.getFunctionalIndexes( catalogTable ) ) {
-                    String[] arr = new String[5];
-                    arr[0] = "";
-                    arr[1] = String.join( ", ", fif.getColumnNames() );
-                    arr[2] = store.getUniqueName();
-                    arr[3] = fif.methodDisplayName;
-                    arr[4] = "FUNCTIONAL";
-                    data.add( arr );
-                }
-            }
-
-            result = new Result( header, data.toArray( new String[0][2] ) );
-
-        } catch ( UnknownTableException | UnknownDatabaseException | UnknownSchemaException e ) {
-            log.error( "Caught exception while fetching indexes", e );
-            result = new Result( e );
         }
-        return result;
+
+        ctx.json( RelationalResult.builder().header( header ).data( data.toArray( new String[0][2] ) ).build() );
     }
 
 
     /**
      * Drop an index of a table
      */
-    Result dropIndex( final Request req, final Response res ) {
-        Index index = gson.fromJson( req.body(), Index.class );
-        Transaction transaction = getTransaction();
+    void dropIndex( final Context ctx ) {
+        IndexModel index = ctx.bodyAsClass( IndexModel.class );
 
-        String tableId = String.format( "\"%s\".\"%s\"", index.getSchema(), index.getTable() );
-        String query = String.format( "ALTER TABLE %s DROP INDEX \"%s\"", tableId, index.getName() );
-        Result result;
-        try {
-            int a = executeSqlUpdate( transaction, query );
-            transaction.commit();
-            result = new Result( a ).setGeneratedQuery( query );
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Caught exception while dropping an index", e );
-            result = new Result( e );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
-        return result;
+        String tableName = getFullEntityName( index.entityId );
+        String query = String.format( "ALTER TABLE %s DROP INDEX \"%s\"", tableName, index.getName() );
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
     }
 
 
     /**
      * Create an index for a table
      */
-    Result createIndex( final Request req, final Response res ) {
-        Index index = this.gson.fromJson( req.body(), Index.class );
-        Transaction transaction = getTransaction();
+    void createIndex( final Context ctx ) {
+        IndexModel index = ctx.bodyAsClass( IndexModel.class );
 
-        String tableId = String.format( "\"%s\".\"%s\"", index.getSchema(), index.getTable() );
-        Result result;
+        LogicalNamespace namespace = Catalog.snapshot().getNamespace( index.namespaceId ).orElseThrow();
+        LogicalTable table = Catalog.snapshot().rel().getTable( index.entityId ).orElseThrow();
+
+        String tableId = String.format( "\"%s\".\"%s\"", namespace.name, table.name );
         StringJoiner colJoiner = new StringJoiner( ",", "(", ")" );
-        for ( String col : index.getColumns() ) {
-            colJoiner.add( "\"" + col + "\"" );
+        for ( long col : index.columnIds ) {
+            colJoiner.add( "\"" + Catalog.snapshot().rel().getColumn( col ).orElseThrow().name + "\"" );
         }
-        String onStore;
-        if ( index.getStoreUniqueName().equals( "Polypheny-DB" ) ) {
-            onStore = "";
-        } else {
-            onStore = String.format( "ON STORE \"%s\"", index.getStoreUniqueName() );
+        String store = IndexManager.POLYPHENY;
+        if ( index.storeUniqueName != null && !index.storeUniqueName.equals( "Polypheny-DB" ) ) {
+            store = index.getStoreUniqueName();
         }
-        String query = String.format( "ALTER TABLE %s ADD INDEX \"%s\" ON %s USING \"%s\" %s", tableId, index.getName(), colJoiner.toString(), index.getMethod(), onStore );
-        try {
-            int a = executeSqlUpdate( transaction, query );
-            transaction.commit();
-            result = new Result( a );
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Caught exception while creating an index", e );
-            result = new Result( e );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
-        return result;
+        String onStore = String.format( "ON STORE \"%s\"", store );
+
+        String query = String.format( "ALTER TABLE %s ADD INDEX \"%s\" ON %s USING \"%s\" %s", tableId, index.getName(), colJoiner, index.getMethod(), onStore );
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
     }
 
 
-    UnderlyingTables getUnderlyingTable( final Request req, final Response res ) {
+    void getUnderlyingTable( final Context ctx ) {
+        UIRequest request = ctx.bodyAsClass( UIRequest.class );
 
-        UIRequest request = this.gson.fromJson( req.body(), UIRequest.class );
-        try {
-            CatalogTable catalogTable = catalog.getTable( "APP", request.getSchemaName(), request.getTableName() );
+        LogicalTable table = Catalog.snapshot().rel().getTable( request.entityId ).orElseThrow();
 
-            if ( catalogTable.tableType == TableType.VIEW ) {
-                Map<Long, List<Long>> underlyingTableOriginal = ((CatalogView) catalogTable).getUnderlyingTables();
-                Map<String, List<String>> underlyingTable = new HashMap<>();
-                for ( Entry<Long, List<Long>> entry : underlyingTableOriginal.entrySet() ) {
-                    List<String> columns = new ArrayList<>();
-                    for ( Long ids : entry.getValue() ) {
-                        columns.add( catalog.getColumn( ids ).name );
-                    }
-                    underlyingTable.put( catalog.getTable( entry.getKey() ).name, columns );
+        if ( table.entityType == EntityType.VIEW ) {
+            ImmutableMap<Long, List<Long>> underlyingTableOriginal = table.unwrapOrThrow( LogicalView.class ).underlyingTables;
+            Map<String, List<String>> underlyingTable = new HashMap<>();
+            for ( Entry<Long, List<Long>> entry : underlyingTableOriginal.entrySet() ) {
+                List<String> columns = new ArrayList<>();
+                for ( Long ids : entry.getValue() ) {
+                    columns.add( Catalog.snapshot().rel().getColumn( ids ).orElseThrow().name );
                 }
-                return new UnderlyingTables( underlyingTable );
-            } else {
-                throw new RuntimeException( "only possible with Views" );
+                underlyingTable.put( Catalog.snapshot().rel().getTable( entry.getKey() ).orElseThrow().name, columns );
             }
-
-        } catch ( UnknownDatabaseException | UnknownSchemaException | UnknownTableException e ) {
-            return new UnderlyingTables( e );
+            ctx.json( new UnderlyingTables( underlyingTable ) );
+        } else {
+            throw new GenericRuntimeException( "Only possible with Views" );
         }
     }
 
@@ -2032,43 +1684,35 @@ public class Crud implements InformationObserver {
     /**
      * Get placements of a table
      */
-    Placement getPlacements( final Request req, final Response res ) {
-        Index index = gson.fromJson( req.body(), Index.class );
-        return getPlacements( index );
+    void getPlacements( final Context ctx ) {
+        IndexModel index = ctx.bodyAsClass( IndexModel.class );
+        ctx.json( getPlacements( index ) );
     }
 
 
-    private Placement getPlacements( final Index index ) {
-        String schemaName = index.getSchema();
-        String tableName = index.getTable();
-        try {
-            CatalogTable table = catalog.getTable( databaseName, schemaName, tableName );
-            Placement p = new Placement( table.isPartitioned, catalog.getPartitionNames( table.id ), table.tableType );
-            if ( table.tableType == TableType.VIEW ) {
+    private PlacementModel getPlacements( final IndexModel index ) {
+        Snapshot snapshot = Catalog.snapshot();
 
-                return p;
-            } else {
-                long pkid = table.primaryKey;
-                List<Long> pkColumnIds = Catalog.getInstance().getPrimaryKey( pkid ).columnIds;
-                CatalogColumn pkColumn = Catalog.getInstance().getColumn( pkColumnIds.get( 0 ) );
-                List<CatalogColumnPlacement> pkPlacements = catalog.getColumnPlacements( pkColumn.id );
-                for ( CatalogColumnPlacement placement : pkPlacements ) {
-                    Adapter adapter = AdapterManager.getInstance().getAdapter( placement.adapterId );
-                    p.addAdapter( new Placement.Store(
-                            adapter.getUniqueName(),
-                            adapter.getAdapterName(),
-                            catalog.getColumnPlacementsOnAdapter( adapter.getAdapterId(), table.id ),
-                            catalog.getPartitionsIndexOnDataPlacement( placement.adapterId, placement.tableId ),
-                            table.numPartitions,
-                            table.partitionType ) );
-                }
-                return p;
+        LogicalTable table = Catalog.snapshot().rel().getTable( index.entityId ).orElseThrow();
+        PlacementModel p = new PlacementModel( snapshot.alloc().getFromLogical( table.id ).size() > 1, snapshot.alloc().getPartitionGroupNames( table.id ), table.entityType );
+        if ( table.entityType != EntityType.VIEW ) {
+            long pkid = table.primaryKey;
+            List<Long> pkColumnIds = snapshot.rel().getPrimaryKey( pkid ).orElseThrow().fieldIds;
+            LogicalColumn pkColumn = snapshot.rel().getColumn( pkColumnIds.get( 0 ) ).orElseThrow();
+            List<AllocationColumn> pkPlacements = snapshot.alloc().getColumnFromLogical( pkColumn.id ).orElseThrow();
+            for ( AllocationColumn placement : pkPlacements ) {
+                Adapter<?> adapter = AdapterManager.getInstance().getAdapter( placement.adapterId ).orElseThrow();
+                PartitionProperty property = snapshot.alloc().getPartitionProperty( table.id ).orElseThrow();
+                p.addAdapter( new RelationalStore(
+                        adapter.getUniqueName(),
+                        adapter.getUniqueName(),
+                        snapshot.alloc().getColumnPlacementsOnAdapterPerEntity( adapter.getAdapterId(), table.id ),
+                        snapshot.alloc().getPartitionGroupsIndexOnDataPlacement( placement.adapterId, placement.logicalTableId ),
+                        property.numPartitionGroups,
+                        property.partitionType ) );
             }
-
-        } catch ( UnknownTableException | UnknownDatabaseException | UnknownSchemaException e ) {
-            log.error( "Caught exception while getting placements", e );
-            return new Placement( e );
         }
+        return p;
     }
 
 
@@ -2077,70 +1721,55 @@ public class Crud implements InformationObserver {
      * Parameter of type models.Index: index name corresponds to storeUniqueName
      * Index method: either 'ADD' or 'DROP'
      */
-    Result addDropPlacement( final Request req, final Response res ) {
-        Index index = gson.fromJson( req.body(), Index.class );
-        if ( !index.getMethod().equalsIgnoreCase( "ADD" ) && !index.getMethod().equalsIgnoreCase( "DROP" ) && !index.getMethod().equalsIgnoreCase( "MODIFY" ) ) {
-            return new Result( "Invalid request" );
+    void addDropPlacement( final Context ctx ) {
+        PlacementFieldsModel placementFields = ctx.bodyAsClass( PlacementFieldsModel.class );
+        if ( placementFields.method() == null ) {
+            ctx.json( RelationalResult.builder().error( "Invalid request" ).build() );
+            return;
         }
         StringJoiner columnJoiner = new StringJoiner( ",", "(", ")" );
         int counter = 0;
-        if ( !index.getMethod().equalsIgnoreCase( "DROP" ) ) {
-            for ( String col : index.getColumns() ) {
-                columnJoiner.add( "\"" + col + "\"" );
+        if ( placementFields.method() != PlacementFieldsModel.Method.DROP ) {
+            for ( String name : placementFields.fieldNames() ) {
+                columnJoiner.add( "\"" + name + "\"" );
                 counter++;
             }
         }
         String columnListStr = counter > 0 ? columnJoiner.toString() : "";
         String query = String.format(
                 "ALTER TABLE \"%s\".\"%s\" %s PLACEMENT %s ON STORE \"%s\"",
-                index.getSchema(),
-                index.getTable(),
-                index.getMethod().toUpperCase(),
+                Catalog.snapshot().getNamespace( placementFields.namespaceId() ).orElseThrow().name,
+                Catalog.snapshot().rel().getTable( placementFields.entityId() ).orElseThrow().name,
+                placementFields.method().name(),
                 columnListStr,
-                index.getStoreUniqueName() );
-        Transaction transaction = getTransaction();
-        int affectedRows;
-        try {
-            affectedRows = executeSqlUpdate( transaction, query );
-            transaction.commit();
-        } catch ( QueryExecutionException | TransactionException e ) {
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-            return new Result( e );
-        }
-        return new Result( affectedRows ).setGeneratedQuery( query );
+                placementFields.adapterName() );
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
     }
 
 
-    String getPartitionTypes( final Request req, final Response res ) {
-        return gson.toJson( Arrays.stream( PartitionType.values() ).filter( t -> t != PartitionType.NONE ).toArray( PartitionType[]::new ), PartitionType[].class );
+    void getPartitionTypes( final Context ctx ) {
+        ctx.json( Arrays.stream( PartitionType.values() ).filter( t -> t != PartitionType.NONE ).toArray( PartitionType[]::new ) );
     }
 
 
-    private List<PartitionFunctionColumn> buildPartitionFunctionRow( List<PartitionFunctionInfoColumn> columnList ) {
+    private List<PartitionFunctionColumn> buildPartitionFunctionRow( PartitioningRequest request, List<PartitionFunctionInfoColumn> columnList ) {
         List<PartitionFunctionColumn> constructedRow = new ArrayList<>();
 
         for ( PartitionFunctionInfoColumn currentColumn : columnList ) {
-            FieldType type;
-            switch ( currentColumn.getFieldType() ) {
-                case STRING:
-                    type = FieldType.STRING;
-                    break;
-                case INTEGER:
-                    type = FieldType.INTEGER;
-                    break;
-                case LIST:
-                    type = FieldType.LIST;
-                    break;
-                case LABEL:
-                    type = FieldType.LABEL;
-                    break;
-                default:
-                    throw new RuntimeException( "Unknown Field Type: " + currentColumn.getFieldType() );
-            }
+            FieldType type = switch ( currentColumn.getFieldType() ) {
+                case STRING -> FieldType.STRING;
+                case INTEGER -> FieldType.INTEGER;
+                case LIST -> FieldType.LIST;
+                case LABEL -> FieldType.LABEL;
+            };
 
             if ( type.equals( FieldType.LIST ) ) {
                 constructedRow.add( new PartitionFunctionColumn( type, currentColumn.getOptions(), currentColumn.getDefaultValue() )
@@ -2149,7 +1778,10 @@ public class Crud implements InformationObserver {
                         .setSqlPrefix( currentColumn.getSqlPrefix() )
                         .setSqlSuffix( currentColumn.getSqlSuffix() ) );
             } else {
-                constructedRow.add( new PartitionFunctionColumn( type, currentColumn.getDefaultValue() )
+
+                String defaultValue = getDefaultValue( request, currentColumn, type );
+
+                constructedRow.add( new PartitionFunctionColumn( type, defaultValue )
                         .setModifiable( currentColumn.isModifiable() )
                         .setMandatory( currentColumn.isMandatory() )
                         .setSqlPrefix( currentColumn.getSqlPrefix() )
@@ -2161,23 +1793,38 @@ public class Crud implements InformationObserver {
     }
 
 
-    PartitionFunctionModel getPartitionFunctionModel( final Request req, final Response res ) {
-        PartitioningRequest request = gson.fromJson( req.body(), PartitioningRequest.class );
+    private static String getDefaultValue( PartitioningRequest request, PartitionFunctionInfoColumn currentColumn, FieldType type ) {
+        String defaultValue = currentColumn.getDefaultValue();
+
+        // Used specifically for Temp-Partitioning since number of selected partitions remains 2 but chunks change
+        // enables user to use selected "number of partitions" being used as default value for "number of internal data chunks"
+        if ( request.method.equals( PartitionType.TEMPERATURE ) ) {
+
+            if ( type.equals( FieldType.STRING ) && currentColumn.getDefaultValue().equals( "-04071993" ) ) {
+                defaultValue = String.valueOf( request.numPartitions );
+            }
+        }
+        return defaultValue;
+    }
+
+
+    void getPartitionFunctionModel( final Context ctx ) {
+        PartitioningRequest request = ctx.bodyAsClass( PartitioningRequest.class );
 
         // Get correct partition function
-        PartitionManagerFactory partitionManagerFactory = new PartitionManagerFactory();
-        PartitionManager partitionManager = partitionManagerFactory.getInstance( request.method );
+        PartitionManagerFactory partitionManagerFactory = PartitionManagerFactory.getInstance();
+        PartitionManager partitionManager = partitionManagerFactory.getPartitionManager( request.method );
 
         // Check whether the selected partition function supports the selected partition column
-        CatalogColumn partitionColumn;
-        try {
-            partitionColumn = Catalog.getInstance().getColumn( "APP", request.schemaName, request.tableName, request.column );
-        } catch ( UnknownColumnException | UnknownSchemaException | UnknownDatabaseException | UnknownTableException e ) { // This should not happen
-            log.error( "Unknown column", e );
-            throw new RuntimeException( e );
-        }
+        LogicalColumn partitionColumn;
+
+        LogicalNamespace namespace = Catalog.snapshot().getNamespace( request.schemaName ).orElseThrow();
+
+        partitionColumn = Catalog.snapshot().rel().getColumn( namespace.id, request.tableName, request.column ).orElseThrow();
+
         if ( !partitionManager.supportsColumnOfType( partitionColumn.type ) ) {
-            return new PartitionFunctionModel( "The partition function " + request.method + " does not support columns of type " + partitionColumn.type );
+            ctx.json( new PartitionFunctionModel( "The partition function " + request.method + " does not support columns of type " + partitionColumn.type ) );
+            return;
         }
 
         PartitionFunctionInfo functionInfo = partitionManager.getPartitionFunctionInfo();
@@ -2189,23 +1836,23 @@ public class Crud implements InformationObserver {
         if ( infoJson.has( "rowsBefore" ) ) {
             // Insert Rows Before
             List<List<PartitionFunctionInfoColumn>> rowsBefore = functionInfo.getRowsBefore();
-            for ( int i = 0; i < rowsBefore.size(); i++ ) {
-                rows.add( buildPartitionFunctionRow( rowsBefore.get( i ) ) );
+            for ( List<PartitionFunctionInfoColumn> partitionFunctionInfoColumns : rowsBefore ) {
+                rows.add( buildPartitionFunctionRow( request, partitionFunctionInfoColumns ) );
             }
         }
 
         if ( infoJson.has( "dynamicRows" ) ) {
             // Build as many dynamic rows as requested per num Partitions
             for ( int i = 0; i < request.numPartitions; i++ ) {
-                rows.add( buildPartitionFunctionRow( functionInfo.getDynamicRows() ) );
+                rows.add( buildPartitionFunctionRow( request, functionInfo.getDynamicRows() ) );
             }
         }
 
         if ( infoJson.has( "rowsAfter" ) ) {
             // Insert Rows After
             List<List<PartitionFunctionInfoColumn>> rowsAfter = functionInfo.getRowsAfter();
-            for ( int i = 0; i < rowsAfter.size(); i++ ) {
-                rows.add( buildPartitionFunctionRow( rowsAfter.get( i ) ) );
+            for ( List<PartitionFunctionInfoColumn> partitionFunctionInfoColumns : rowsAfter ) {
+                rows.add( buildPartitionFunctionRow( request, partitionFunctionInfoColumns ) );
             }
         }
 
@@ -2215,40 +1862,35 @@ public class Crud implements InformationObserver {
         model.setPartitionColumnName( request.column );
         model.setSchemaName( request.schemaName );
 
-        return model;
+        ctx.json( model );
     }
 
 
-    Result partitionTable( final Request req, final Response res ) {
-        PartitionFunctionModel request = gson.fromJson( req.body(), PartitionFunctionModel.class );
+    void partitionTable( final Context ctx ) {
+        PartitionFunctionModel request = ctx.bodyAsClass( PartitionFunctionModel.class );
 
         // Get correct partition function
-        PartitionManagerFactory partitionManagerFactory = new PartitionManagerFactory();
-        PartitionManager partitionManager = null;
-        try {
-            partitionManager = partitionManagerFactory.getInstance( PartitionType.getByName( request.functionName ) );
-        } catch ( UnknownPartitionTypeException e ) {
-            throw new RuntimeException( e );
-        }
+        PartitionManagerFactory partitionManagerFactory = PartitionManagerFactory.getInstance();
+        PartitionManager partitionManager = partitionManagerFactory.getPartitionManager( PartitionType.getByName( request.functionName ) );
 
         PartitionFunctionInfo functionInfo = partitionManager.getPartitionFunctionInfo();
 
-        String content = "";
+        StringBuilder content = new StringBuilder();
         for ( List<PartitionFunctionColumn> currentRow : request.rows ) {
             boolean rowSeparationApplied = false;
             for ( PartitionFunctionColumn currentColumn : currentRow ) {
                 if ( currentColumn.modifiable ) {
                     // If more than one row, keep appending ','
                     if ( !rowSeparationApplied && request.rows.indexOf( currentRow ) != 0 ) {
-                        content = content + functionInfo.getRowSeparation();
+                        content.append( functionInfo.getRowSeparation() );
                         rowSeparationApplied = true;
                     }
-                    content = content + currentColumn.sqlPrefix + " " + currentColumn.value + " " + currentColumn.sqlSuffix;
+                    content.append( currentColumn.sqlPrefix ).append( " " ).append( currentColumn.value ).append( " " ).append( currentColumn.sqlSuffix );
                 }
             }
         }
 
-        content = functionInfo.getSqlPrefix() + " " + content + " " + functionInfo.getSqlSuffix();
+        content = new StringBuilder( functionInfo.getSqlPrefix() + " " + content + " " + functionInfo.getSqlSuffix() );
 
         //INFO - do discuss
         //Problem is that we took the structure completely out of the original JSON therefore losing valuable information and context
@@ -2260,156 +1902,93 @@ public class Crud implements InformationObserver {
         String query = String.format( "ALTER TABLE \"%s\".\"%s\" PARTITION BY %s (\"%s\") %s ",
                 request.schemaName, request.tableName, request.functionName, request.partitionColumnName, content );
 
-        Transaction trx = getTransaction();
-        try {
-            int i = executeSqlUpdate( trx, query );
-            trx.commit();
-            return new Result( i ).setGeneratedQuery( query );
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Could not partition table", e );
-            try {
-                trx.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-            return new Result( e ).setGeneratedQuery( query );
-        }
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
     }
 
 
-    Result mergePartitions( final Request req, final Response res ) {
-        PartitioningRequest request = gson.fromJson( req.body(), PartitioningRequest.class );
+    void mergePartitions( final Context ctx ) {
+        PartitioningRequest request = ctx.bodyAsClass( PartitioningRequest.class );
         String query = String.format( "ALTER TABLE \"%s\".\"%s\" MERGE PARTITIONS", request.schemaName, request.tableName );
-        Transaction trx = getTransaction();
-        try {
-            int i = executeSqlUpdate( trx, query );
-            trx.commit();
-            return new Result( i ).setGeneratedQuery( query );
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Could not merge partitions", e );
-            try {
-                trx.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-            return new Result( e ).setGeneratedQuery( query );
-        }
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
     }
 
 
-    Result modifyPartitions( final Request req, final Response res ) {
-        ModifyPartitionRequest request = gson.fromJson( req.body(), ModifyPartitionRequest.class );
+    void modifyPartitions( final Context ctx ) {
+        ModifyPartitionRequest request = ctx.bodyAsClass( ModifyPartitionRequest.class );
         StringJoiner partitions = new StringJoiner( "," );
         for ( String partition : request.partitions ) {
             partitions.add( "\"" + partition + "\"" );
         }
-        String query = String.format( "ALTER TABLE \"%s\".\"%s\" MODIFY PARTITIONS(%s) ON STORE %s", request.schemaName, request.tableName, partitions.toString(), request.storeUniqueName );
-        Transaction trx = getTransaction();
-        try {
-            int i = executeSqlUpdate( trx, query );
-            trx.commit();
-            return new Result( i ).setGeneratedQuery( query );
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Could not modify partitions", e );
-            try {
-                trx.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-            return new Result( e ).setGeneratedQuery( query );
-        }
+        String query = String.format( "ALTER TABLE \"%s\".\"%s\" MODIFY PARTITIONS(%s) ON STORE %s", request.schemaName, request.tableName, partitions, request.storeUniqueName );
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
     }
 
 
     /**
      * Get deployed data stores
      */
-    String getStores( final Request req, final Response res ) {
-        ImmutableMap<String, DataStore> stores = AdapterManager.getInstance().getStores();
-        DataStore[] out = stores.values().toArray( new DataStore[0] );
-        return adapterSerializer().toJson( out, DataStore[].class );
-    }
-
-
-    private Gson adapterSerializer() {
-        //see https://futurestud.io/tutorials/gson-advanced-custom-serialization-part-1
-        JsonSerializer<DataStore> storeSerializer = ( src, typeOfSrc, context ) -> {
-
-            JsonObject jsonStore = new JsonObject();
-            jsonStore.addProperty( "adapterId", src.getAdapterId() );
-            jsonStore.addProperty( "uniqueName", src.getUniqueName() );
-            jsonStore.add( "adapterSettings", context.serialize( serializeSettings( src.getAvailableSettings(), src.getCurrentSettings() ) ) );
-            jsonStore.add( "currentSettings", context.serialize( src.getCurrentSettings() ) );
-            jsonStore.addProperty( "adapterName", src.getAdapterName() );
-            jsonStore.addProperty( "type", src.getClass().getCanonicalName() );
-            jsonStore.add( "persistent", context.serialize( src.isPersistent() ) );
-            jsonStore.add( "availableIndexMethods", context.serialize( src.getAvailableIndexMethods() ) );
-            return jsonStore;
-        };
-        JsonSerializer<DataSource> sourceSerializer = ( src, typeOfSrc, context ) -> {
-
-            JsonObject jsonSource = new JsonObject();
-            jsonSource.addProperty( "adapterId", src.getAdapterId() );
-            jsonSource.addProperty( "uniqueName", src.getUniqueName() );
-            jsonSource.addProperty( "adapterName", src.getAdapterName() );
-            jsonSource.add( "adapterSettings", context.serialize( serializeSettings( src.getAvailableSettings(), src.getCurrentSettings() ) ) );
-            jsonSource.add( "currentSettings", context.serialize( src.getCurrentSettings() ) );
-            jsonSource.add( "dataReadOnly", context.serialize( src.isDataReadOnly() ) );
-            jsonSource.addProperty( "type", src.getClass().getCanonicalName() );
-            return jsonSource;
-        };
-        return new GsonBuilder().registerTypeAdapter( DataStore.class, storeSerializer ).registerTypeAdapter( DataSource.class, sourceSerializer ).create();
-    }
-
-
-    private List<AbstractAdapterSetting> serializeSettings( List<AbstractAdapterSetting> availableSettings, Map<String, String> currentSettings ) {
-        ArrayList<AbstractAdapterSetting> abstractAdapterSettings = new ArrayList<>();
-        for ( AbstractAdapterSetting s : availableSettings ) {
-            for ( String current : currentSettings.keySet() ) {
-                if ( s.name.equals( current ) ) {
-                    abstractAdapterSettings.add( s );
-                }
-            }
-        }
-        return abstractAdapterSettings;
+    void getStores( final Context ctx ) {
+        ImmutableMap<String, DataStore<?>> stores = AdapterManager.getInstance().getStores();
+        DataStore<?>[] out = stores.values().toArray( new DataStore[0] );
+        ctx.json( out );
     }
 
 
     /**
      * Get the available stores on which a new index can be placed. 'Polypheny-DB' is part of the list, if polystore-indexes are enabled
      */
-    String getAvailableStoresForIndexes( final Request req, final Response res ) {
-        Index index = gson.fromJson( req.body(), Index.class );
-        Placement dataPlacements = getPlacements( index );
-        ImmutableMap<String, DataStore> stores = AdapterManager.getInstance().getStores();
-        List<DataStore> filteredStores = stores.values().stream().filter( ( s ) -> {
-            if ( s.getAvailableIndexMethods() == null || s.getAvailableIndexMethods().size() == 0 ) {
+    void getAvailableStoresForIndexes( final Context ctx ) {
+        IndexModel index = ctx.bodyAsClass( IndexModel.class );
+        PlacementModel dataPlacements = getPlacements( index );
+        Map<String, DataStore<?>> stores = AdapterManager.getInstance().getStores();
+        List<IndexAdapterModel> filtered = stores.values().stream().filter( ( s ) -> {
+            if ( s.getAvailableIndexMethods() == null || s.getAvailableIndexMethods().isEmpty() ) {
                 return false;
             }
-            if ( dataPlacements.stores.stream().noneMatch( ( dp ) -> dp.uniqueName.equals( s.getUniqueName() ) ) ) {
-                return false;
-            }
-            return true;
-        } ).collect( Collectors.toList() );
-        //see https://stackoverflow.com/questions/18857884/how-to-convert-arraylist-of-custom-class-to-jsonarray-in-java
-        Gson storeSerializer = adapterSerializer();
-        JsonArray jsonArray = storeSerializer.toJsonTree( filteredStores.toArray( new DataStore[0] ) ).getAsJsonArray();
+            return dataPlacements.stores.stream().anyMatch( ( dp ) -> dp.uniqueName.equals( s.getUniqueName() ) );
+        } ).map( IndexAdapterModel::from ).collect( Collectors.toCollection( ArrayList::new ) );
+
         if ( RuntimeConfig.POLYSTORE_INDEXES_ENABLED.getBoolean() ) {
-            JsonObject pdbFakeStore = new JsonObject();
-            pdbFakeStore.addProperty( "uniqueName", "Polypheny-DB" );
-            pdbFakeStore.add( "availableIndexMethods", storeSerializer.toJsonTree( IndexManager.getAvailableIndexMethods() ) );
-            jsonArray.add( pdbFakeStore );
+            IndexAdapterModel poly = new IndexAdapterModel(
+                    -1L,
+                    "Polypheny-DB",
+                    IndexManager.getAvailableIndexMethods().stream().map( IndexMethodModel::from ).toList() );
+            filtered.add( poly );
         }
-        return storeSerializer.toJson( jsonArray );
+        ctx.json( filtered );
     }
 
 
     /**
      * Update the settings of an adapter
      */
-    Result updateAdapterSettings( final Request req, final Response res ) {
+    void updateAdapterSettings( final Context ctx ) {
         //see https://stackoverflow.com/questions/16872492/gson-and-abstract-superclasses-deserialization-issue
-        JsonDeserializer<Adapter> storeDeserializer = ( json, typeOfT, context ) -> {
+        JsonDeserializer<Adapter<?>> storeDeserializer = ( json, typeOfT, context ) -> {
             JsonObject jsonObject = json.getAsJsonObject();
             String type = jsonObject.get( "type" ).getAsString();
             try {
@@ -2419,219 +1998,250 @@ public class Crud implements InformationObserver {
             }
         };
         Gson adapterGson = new GsonBuilder().registerTypeAdapter( Adapter.class, storeDeserializer ).create();
-        Adapter adapter = adapterGson.fromJson( req.body(), Adapter.class );
+        Adapter<?> adapter = adapterGson.fromJson( ctx.body(), Adapter.class );
         try {
             if ( adapter instanceof DataStore ) {
-                AdapterManager.getInstance().getStore( adapter.getAdapterId() ).updateSettings( adapter.getCurrentSettings() );
+                AdapterManager.getInstance().getStore( adapter.getAdapterId() ).orElseThrow().updateSettings( adapter.getCurrentSettings() );
             } else if ( adapter instanceof DataSource ) {
-                AdapterManager.getInstance().getSource( adapter.getAdapterId() ).updateSettings( adapter.getCurrentSettings() );
+                AdapterManager.getInstance().getSource( adapter.getAdapterId() ).orElseThrow().updateSettings( adapter.getCurrentSettings() );
             }
             Catalog.getInstance().commit();
         } catch ( Throwable t ) {
-            return new Result( "Could not update AdapterSettings", t );
+            ctx.json( RelationalResult.builder().error( "Could not update AdapterSettings: " + t.getMessage() ).build() );
+            return;
         }
 
-        // Reset caches (not a nice solution to create a transaction, statement and query processor for doing this but it
-        // currently seams to be the best option). When migrating this to a DDL manager, make sure to find a better approach.
+        // Reset caches (not a nice solution to create a transaction, statement and query processor for doing this, but it
+        // currently seems to be the best option). When migrating this to a DDL manager, make sure to find a better approach.
         Transaction transaction = null;
         try {
             transaction = getTransaction();
             transaction.createStatement().getQueryProcessor().resetCaches();
             transaction.commit();
         } catch ( TransactionException e ) {
+            String error = "Error while resetting caches: " + e.getMessage();
             if ( transaction != null ) {
-                try {
-                    transaction.rollback();
-                } catch ( TransactionException transactionException ) {
-                    log.error( "Exception while rollback", transactionException );
-                }
+                transaction.rollback( error );
             }
-            return new Result( "Error while resetting caches", e );
+
+            ctx.json( RelationalResult.builder().error( error ).build() );
+            return;
         }
 
-        return new Result( 1 );
+        ctx.json( RelationalResult.builder().affectedTuples( 1 ).build() );
     }
 
 
     /**
      * Get available adapters
      */
-    private String getAvailableAdapters( AdapterType adapterType ) {
-        JsonSerializer<AdapterInformation> adapterSerializer = ( src, typeOfSrc, context ) -> {
-            JsonObject jsonStore = new JsonObject();
-            jsonStore.addProperty( "name", src.name );
-            jsonStore.addProperty( "description", src.description );
-            jsonStore.addProperty( "clazz", src.clazz.getCanonicalName() );
-            jsonStore.add( "adapterSettings", context.serialize( src.settings ) );
-            return jsonStore;
-        };
-        Gson adapterGson = new GsonBuilder().registerTypeAdapter( AdapterInformation.class, adapterSerializer ).create();
-
-        List<AdapterInformation> adapters = AdapterManager.getInstance().getAvailableAdapters( adapterType );
-        AdapterInformation[] out = adapters.toArray( new AdapterInformation[0] );
-        return adapterGson.toJson( out, AdapterInformation[].class );
+    private void getAvailableAdapters( Context ctx, AdapterType adapterType ) {
+        List<AdapterInformation> adapters = AdapterManager.getInstance().getAdapterTemplates( adapterType );
+        ctx.json( adapters.toArray( new AdapterInformation[0] ) );
     }
 
 
-    String getAvailableStores( final Request req, final Response res ) {
-        return getAvailableAdapters( AdapterType.STORE );
+    void getAvailableStores( final Context ctx ) {
+        getAvailableAdapters( ctx, AdapterType.STORE );
     }
 
 
-    String getAvailableSources( final Request req, final Response res ) {
-        return getAvailableAdapters( AdapterType.SOURCE );
+    void getAvailableSources( final Context ctx ) {
+        getAvailableAdapters( ctx, AdapterType.SOURCE );
     }
 
 
     /**
      * Get deployed data sources
      */
-    String getSources( final Request req, final Response res ) {
-        ImmutableMap<String, DataSource> sources = AdapterManager.getInstance().getSources();
-        DataSource[] out = sources.values().toArray( new DataSource[0] );
-        return adapterSerializer().toJson( out, DataSource[].class );
+    void getSources( final Context ctx ) {
+        ImmutableMap<String, DataSource<?>> sources = AdapterManager.getInstance().getSources();
+        ctx.json( sources.values().toArray( new DataSource<?>[0] ) );
     }
 
 
     /**
      * Deploy a new adapter
      */
-    Result addAdapter( final Request req, final Response res ) {
-        initMultipart( req );
+    void createAdapter( final Context ctx ) throws ServletException, IOException {
+        initMultipart( ctx );
         String body = "";
         Map<String, InputStream> inputStreams = new HashMap<>();
-        try {
-            for ( Part part : req.raw().getParts() ) {
+
+        final AdapterModel a;
+        if ( ctx.isMultipartFormData() ) {
+            // collect all files e.g. csv files
+            for ( Part part : ctx.req.getParts() ) {
                 if ( part.getName().equals( "body" ) ) {
-                    body = new BufferedReader( new InputStreamReader( req.raw().getPart( "body" ).getInputStream(), StandardCharsets.UTF_8 ) ).lines().collect( Collectors.joining( System.lineSeparator() ) );
+                    body = IOUtils.toString( ctx.req.getPart( "body" ).getInputStream(), StandardCharsets.UTF_8 );
                 } else {
                     inputStreams.put( part.getName(), part.getInputStream() );
                 }
             }
-        } catch ( ServletException | IOException e ) {
-            log.error( "Could not get form data to add a new Adapter", e );
-            return new Result( e );
+            a = HttpServer.mapper.readValue( body, AdapterModel.class );
+        } else if ( "application/json".equals( ctx.contentType() ) ) {
+            a = ctx.bodyAsClass( AdapterModel.class );
+        } else {
+            ctx.status( HttpCode.BAD_REQUEST );
+            return;
         }
-        GsonBuilder gsonBuilder = new GsonBuilder().registerTypeAdapter( AbstractAdapterSetting.class, new AdapterSettingDeserializer() );
-        AdapterModel a = gsonBuilder.create().fromJson( body, AdapterModel.class );
+
         Map<String, String> settings = new HashMap<>();
-        for ( Entry<String, AbstractAdapterSetting> entry : a.settings.entrySet() ) {
-            if ( entry.getValue() instanceof AbstractAdapterSettingDirectory ) {
-                AbstractAdapterSettingDirectory setting = ((AbstractAdapterSettingDirectory) entry.getValue());
-                for ( String fileName : setting.fileNames ) {
-                    setting.inputStreams.put( fileName, inputStreams.get( fileName ) );
-                }
-                File path = FileSystemManager.getInstance().registerNewFolder( "data/csv/" + a.uniqueName );
-                for ( Entry<String, InputStream> is : setting.inputStreams.entrySet() ) {
-                    try {
-                        File file = new File( path, is.getKey() );
-                        FileUtils.copyInputStreamToFile( is.getValue(), file );
-                    } catch ( IOException e ) {
-                        throw new RuntimeException( e );
+
+        ConnectionMethod method = ConnectionMethod.UPLOAD;
+        if ( a.settings.containsKey( "method" ) ) {
+            method = ConnectionMethod.valueOf( a.settings.get( "method" ).toUpperCase() );
+        }
+        AdapterTemplate adapter = AdapterManager.getAdapterTemplate( a.adapterName, a.type );
+        Map<String, AbstractAdapterSetting> allSettings = adapter.settings.stream().collect( Collectors.toMap( e -> e.name, e -> e ) );
+
+        for ( Map.Entry<String, String> entry : a.settings.entrySet() ) {
+            AbstractAdapterSetting set = allSettings.get( entry.getKey() );
+            if ( set == null ) {
+                continue;
+            }
+            if ( set instanceof AbstractAdapterSettingDirectory setting ) {
+                if ( method == ConnectionMethod.LINK ) {
+                    Exception e = handleLinkFiles( ctx, a, setting, allSettings );
+                    if ( e != null ) {
+                        ctx.json( RelationalResult.builder().exception( e ).build() );
+                        return;
                     }
+                    settings.put( set.name, entry.getValue() );
+                } else {
+                    List<String> fileNames = HttpServer.mapper.readValue( entry.getValue(), new TypeReference<>() {
+                    } );
+                    String directory = handleUploadFiles( inputStreams, fileNames, setting, a );
+                    settings.put( set.name, directory );
                 }
-                setting.setDirectory( path.getAbsolutePath() );
-                settings.put( entry.getKey(), entry.getValue().getValue() );
             } else {
-                settings.put( entry.getKey(), entry.getValue().getValue() );
+                settings.put( set.name, entry.getValue() );
             }
         }
 
-        String query = String.format( "ALTER ADAPTERS ADD \"%s\" USING '%s' WITH '%s'", a.uniqueName, a.clazzName, gson.toJson( settings ) );
-        Transaction transaction = getTransaction();
-        try {
-            int numRows = executeSqlUpdate( transaction, query );
-            transaction.commit();
-            return new Result( numRows ).setGeneratedQuery( query );
-        } catch ( Throwable e ) {
-            log.error( "Could not deploy data store", e );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException transactionException ) {
-                log.error( "Exception while rollback", transactionException );
-            }
-            return new Result( e ).setGeneratedQuery( query );
+        settings.put( "mode", a.mode.toString() );
+
+        String query = String.format( "ALTER ADAPTERS ADD \"%s\" USING '%s' AS '%s' WITH '%s'", a.name, a.adapterName, a.type, Crud.gson.toJson( settings ) );
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
+    }
+
+
+    public void startAccessRequest( Context ctx ) {
+        PathAccessRequest request = ctx.bodyAsClass( PathAccessRequest.class );
+        UUID uuid = SecurityManager.getInstance().requestPathAccess( request.getName(), ctx.req.getSession().getId(), Path.of( request.getDirectoryName() ) );
+        if ( uuid != null ) {
+            ctx.json( uuid );
+        } else {
+            ctx.result( "" );
         }
+    }
+
+
+    private Exception handleLinkFiles( Context ctx, AdapterModel a, AbstractAdapterSettingDirectory setting, Map<String, AbstractAdapterSetting> settings ) {
+        if ( !settings.containsKey( "directoryName" ) ) {
+            return new GenericRuntimeException( "Security check for access was not performed; id missing." );
+        }
+        Path path = Path.of( settings.get( "directoryName" ).defaultValue );
+        if ( !SecurityManager.getInstance().checkPathAccess( path ) ) {
+            return new GenericRuntimeException( "Security check for access was not successful; not enough permissions." );
+        }
+
+        return null;
+    }
+
+
+    private static String handleUploadFiles( Map<String, InputStream> inputStreams, List<String> fileNames, AbstractAdapterSettingDirectory setting, AdapterModel a ) {
+        for ( String fileName : fileNames ) {
+            setting.inputStreams.put( fileName, inputStreams.get( fileName ) );
+        }
+        File path = PolyphenyHomeDirManager.getInstance().registerNewFolder( "data/csv/" + a.name );
+        for ( Entry<String, InputStream> is : setting.inputStreams.entrySet() ) {
+            try {
+                File file = new File( path, is.getKey() );
+                FileUtils.copyInputStreamToFile( is.getValue(), file );
+            } catch ( IOException e ) {
+                throw new GenericRuntimeException( e );
+            }
+        }
+        return path.getAbsolutePath();
     }
 
 
     /**
-     * Remove an existing store or source
+     * Remove an existing storeId or source
      */
-    Result removeAdapter( final Request req, final Response res ) {
-        String uniqueName = req.body();
+    void removeAdapter( final Context ctx ) {
+        String uniqueName = ctx.body();
         String query = String.format( "ALTER ADAPTERS DROP \"%s\"", uniqueName );
-        Transaction transaction = getTransaction();
-        try {
-            int a = executeSqlUpdate( transaction, query );
-            transaction.commit();
-            return new Result( a ).setGeneratedQuery( query );
-        } catch ( TransactionException | QueryExecutionException e ) {
-            log.error( "Could not remove store {}", req.body(), e );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException transactionException ) {
-                log.error( "Exception while rollback", transactionException );
-            }
-            return new Result( e ).setGeneratedQuery( query );
-        }
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
     }
 
 
-    String getQueryInterfaces( final Request req, final Response res ) {
+    void getQueryInterfaces( final Context ctx ) {
         QueryInterfaceManager qim = QueryInterfaceManager.getInstance();
         ImmutableMap<String, QueryInterface> queryInterfaces = qim.getQueryInterfaces();
         List<QueryInterfaceModel> qIs = new ArrayList<>();
         for ( QueryInterface i : queryInterfaces.values() ) {
             qIs.add( new QueryInterfaceModel( i ) );
         }
-        return gson.toJson( qIs.toArray( new QueryInterfaceModel[0] ), QueryInterfaceModel[].class );
+        ctx.json( qIs.toArray( new QueryInterfaceModel[0] ) );
     }
 
 
-    String getAvailableQueryInterfaces( final Request req, final Response res ) {
+    void getAvailableQueryInterfaces( final Context ctx ) {
         QueryInterfaceManager qim = QueryInterfaceManager.getInstance();
-        List<QueryInterfaceInformation> interfaces = qim.getAvailableQueryInterfaceTypes();
-        return QueryInterfaceInformation.toJson( interfaces.toArray( new QueryInterfaceInformation[0] ) );
+        List<QueryInterfaceTemplate> interfaces = qim.getAvailableQueryInterfaceTemplates();
+        ctx.json( interfaces );
     }
 
 
-    Result addQueryInterface( final Request req, final Response res ) {
-        QueryInterfaceManager qim = QueryInterfaceManager.getInstance();
-        QueryInterfaceInformationRequest request = gson.fromJson( req.body(), QueryInterfaceInformationRequest.class );
-        String generatedQuery = String.format( "ALTER INTERFACES ADD \"%s\" USING '%s' WITH '%s'", request.uniqueName, request.clazzName, gson.toJson( request.currentSettings ) );
+    void createQueryInterface( final Context ctx ) {
+        QueryInterfaceCreateRequest request = ctx.bodyAsClass( QueryInterfaceCreateRequest.class );
         try {
-            qim.addQueryInterface( catalog, request.clazzName, request.uniqueName, request.currentSettings );
-            return new Result( 1 ).setGeneratedQuery( generatedQuery );
+            QueryInterfaceManager.getInstance().createQueryInterface( request.interfaceType(), request.uniqueName(), request.settings() );
+            ctx.status( 200 );
         } catch ( RuntimeException e ) {
             log.error( "Exception while deploying query interface", e );
-            return new Result( e ).setGeneratedQuery( generatedQuery );
+            ctx.status( 500 ).result( e.getMessage() );
         }
     }
 
 
-    Result updateQueryInterfaceSettings( final Request req, final Response res ) {
-        QueryInterfaceModel request = gson.fromJson( req.body(), QueryInterfaceModel.class );
-        QueryInterfaceManager qim = QueryInterfaceManager.getInstance();
+    void updateQueryInterfaceSettings( final Context ctx ) {
+        QueryInterfaceModel request = ctx.bodyAsClass( QueryInterfaceModel.class );
         try {
-            qim.getQueryInterface( request.uniqueName ).updateSettings( request.currentSettings );
-            return new Result( 1 );
+            QueryInterfaceManager.getInstance().getQueryInterface( request.uniqueName ).updateSettings( request.currentSettings );
+            ctx.status( 200 );
         } catch ( Exception e ) {
-            return new Result( e );
+            ctx.status( 500 ).result( e.getMessage() );
         }
     }
 
 
-    Result removeQueryInterface( final Request req, final Response res ) {
-        String uniqueName = req.body();
-        QueryInterfaceManager qim = QueryInterfaceManager.getInstance();
-        String generatedQuery = String.format( "ALTER INTERFACES DROP \"%s\"", uniqueName );
+    void removeQueryInterface( final Context ctx ) {
+        String uniqueName = ctx.body();
         try {
-            qim.removeQueryInterface( catalog, uniqueName );
-            return new Result( 1 ).setGeneratedQuery( generatedQuery );
-        } catch ( RuntimeException | UnknownQueryInterfaceException e ) {
-            log.error( "Could not remove query interface {}", req.body(), e );
-            return new Result( e ).setGeneratedQuery( generatedQuery );
+            QueryInterfaceManager.getInstance().removeQueryInterface( Catalog.getInstance(), uniqueName );
+            ctx.status( 200 );
+        } catch ( RuntimeException e ) {
+            log.error( "Could not remove query interface {}", ctx.body(), e );
+            ctx.status( 500 ).result( e.getMessage() );
         }
     }
 
@@ -2639,331 +2249,204 @@ public class Crud implements InformationObserver {
     /**
      * Get the required information for the uml view: Foreign keys, Tables with its columns
      */
-    Uml getUml( final Request req, final Response res ) {
-        EditTableRequest request = this.gson.fromJson( req.body(), EditTableRequest.class );
-        ArrayList<ForeignKey> fKeys = new ArrayList<>();
-        ArrayList<DbTable> tables = new ArrayList<>();
+    void getUml( final Context ctx ) {
+        EditTableRequest request = ctx.bodyAsClass( EditTableRequest.class );
+        List<ForeignKey> fKeys = new ArrayList<>();
+        List<DbTable> tables = new ArrayList<>();
 
-        List<CatalogTable> catalogTables = catalog.getTables( new Catalog.Pattern( databaseName ), new Catalog.Pattern( request.schema ), null );
-        for ( CatalogTable catalogTable : catalogTables ) {
-            if ( catalogTable.tableType == TableType.TABLE || catalogTable.tableType == TableType.SOURCE ) {
+        LogicalRelSnapshot relSnapshot = Catalog.snapshot().rel();
+        long namespaceId = request.namespaceId == null ? Catalog.defaultNamespaceId : request.namespaceId;
+        LogicalNamespace namespace = Catalog.snapshot().getNamespace( namespaceId ).orElseThrow();
+        List<LogicalTable> entities = relSnapshot.getTablesFromNamespace( namespace.id );
+
+        for ( LogicalTable table : entities ) {
+            if ( table.entityType == EntityType.ENTITY || table.entityType == EntityType.SOURCE ) {
                 // get foreign keys
-                List<CatalogForeignKey> foreignKeys = catalog.getForeignKeys( catalogTable.id );
-                for ( CatalogForeignKey catalogForeignKey : foreignKeys ) {
-                    for ( int i = 0; i < catalogForeignKey.getReferencedKeyColumnNames().size(); i++ ) {
+                List<LogicalForeignKey> foreignKeys = Catalog.snapshot().rel().getForeignKeys( table.id );
+                for ( LogicalForeignKey logicalForeignKey : foreignKeys ) {
+                    for ( int i = 0; i < logicalForeignKey.getReferencedKeyFieldNames().size(); i++ ) {
                         fKeys.add( ForeignKey.builder()
-                                .targetSchema( catalogForeignKey.getReferencedKeySchemaName() )
-                                .targetTable( catalogForeignKey.getReferencedKeyTableName() )
-                                .targetColumn( catalogForeignKey.getReferencedKeyColumnNames().get( i ) )
-                                .sourceSchema( catalogForeignKey.getSchemaName() )
-                                .sourceTable( catalogForeignKey.getTableName() )
-                                .sourceColumn( catalogForeignKey.getColumnNames().get( i ) )
-                                .fkName( catalogForeignKey.name )
-                                .onUpdate( catalogForeignKey.updateRule.toString() )
-                                .onDelete( catalogForeignKey.deleteRule.toString() )
+                                .targetSchema( logicalForeignKey.getReferencedKeyNamespaceName() )
+                                .targetTable( logicalForeignKey.getReferencedKeyEntityName() )
+                                .targetColumn( logicalForeignKey.getReferencedKeyFieldNames().get( i ) )
+                                .sourceSchema( logicalForeignKey.getSchemaName() )
+                                .sourceTable( logicalForeignKey.getTableName() )
+                                .sourceColumn( logicalForeignKey.getFieldNames().get( i ) )
+                                .fkName( logicalForeignKey.name )
+                                .onUpdate( logicalForeignKey.updateRule.toString() )
+                                .onDelete( logicalForeignKey.deleteRule.toString() )
                                 .build() );
                     }
                 }
 
                 // get tables with its columns
-                DbTable table = new DbTable( catalogTable.name, catalogTable.getSchemaName(), catalogTable.modifiable, catalogTable.tableType );
-                for ( String columnName : catalogTable.getColumnNames() ) {
-                    table.addColumn( new DbColumn( columnName ) );
+                DbTable dbTable = new DbTable( table.name, namespace.name, table.modifiable, table.entityType );
+
+                for ( LogicalColumn column : relSnapshot.getColumns( table.id ) ) {
+                    dbTable.addColumn( UiColumnDefinition.builder().name( column.name ).build() );
                 }
 
                 // get primary key with its columns
-                if ( catalogTable.primaryKey != null ) {
-                    CatalogPrimaryKey catalogPrimaryKey = catalog.getPrimaryKey( catalogTable.primaryKey );
-                    for ( String columnName : catalogPrimaryKey.getColumnNames() ) {
-                        table.addPrimaryKeyField( columnName );
+                if ( table.primaryKey != null ) {
+                    LogicalPrimaryKey primaryKey = Catalog.snapshot().rel().getPrimaryKey( table.primaryKey ).orElseThrow();
+                    for ( String columnName : primaryKey.getFieldNames() ) {
+                        dbTable.addPrimaryKeyField( columnName );
                     }
                 }
 
                 // get unique constraints
-                List<CatalogConstraint> catalogConstraints = catalog.getConstraints( catalogTable.id );
-                for ( CatalogConstraint catalogConstraint : catalogConstraints ) {
-                    if ( catalogConstraint.type == ConstraintType.UNIQUE ) {
+                List<LogicalConstraint> logicalConstraints = Catalog.snapshot().rel().getConstraints( table.id );
+                for ( LogicalConstraint logicalConstraint : logicalConstraints ) {
+                    if ( logicalConstraint.type == ConstraintType.UNIQUE ) {
                         // TODO: unique constraints can be over multiple columns.
-                        if ( catalogConstraint.key.getColumnNames().size() == 1 &&
-                                catalogConstraint.key.getSchemaName().equals( table.getSchema() ) &&
-                                catalogConstraint.key.getTableName().equals( table.getTableName() ) ) {
-                            table.addUniqueColumn( catalogConstraint.key.getColumnNames().get( 0 ) );
+                        if ( logicalConstraint.key.getFieldNames().size() == 1 &&
+                                logicalConstraint.key.getSchemaName().equals( dbTable.getSchema() ) &&
+                                logicalConstraint.key.getTableName().equals( dbTable.getTableName() ) ) {
+                            dbTable.addUniqueColumn( logicalConstraint.key.getFieldNames().get( 0 ) );
                         }
                         // table.addUnique( new ArrayList<>( catalogConstraint.key.columnNames ));
                     }
                 }
 
                 // get unique indexes
-                List<CatalogIndex> catalogIndexes = catalog.getIndexes( catalogTable.id, true );
-                for ( CatalogIndex catalogIndex : catalogIndexes ) {
+                List<LogicalIndex> logicalIndices = Catalog.snapshot().rel().getIndexes( table.id, true );
+                for ( LogicalIndex logicalIndex : logicalIndices ) {
                     // TODO: unique indexes can be over multiple columns.
-                    if ( catalogIndex.key.getColumnNames().size() == 1 &&
-                            catalogIndex.key.getSchemaName().equals( table.getSchema() ) &&
-                            catalogIndex.key.getTableName().equals( table.getTableName() ) ) {
-                        table.addUniqueColumn( catalogIndex.key.getColumnNames().get( 0 ) );
+                    if ( logicalIndex.key.getFieldNames().size() == 1 &&
+                            logicalIndex.key.getSchemaName().equals( dbTable.getSchema() ) &&
+                            logicalIndex.key.getTableName().equals( dbTable.getTableName() ) ) {
+                        dbTable.addUniqueColumn( logicalIndex.key.getFieldNames().get( 0 ) );
                     }
                     // table.addUnique( new ArrayList<>( catalogIndex.key.columnNames ));
                 }
 
-                tables.add( table );
+                tables.add( dbTable );
             }
         }
 
-        return new Uml( tables, fKeys );
+        ctx.json( new Uml( tables, fKeys ) );
     }
 
 
     /**
      * Add foreign key
      */
-    Result addForeignKey( final Request req, final Response res ) {
-        ForeignKey fk = this.gson.fromJson( req.body(), ForeignKey.class );
-        Transaction transaction = getTransaction();
+    void addForeignKey( final Context ctx ) {
+        ForeignKey fk = ctx.bodyAsClass( ForeignKey.class );
 
         String[] t = fk.getSourceTable().split( "\\." );
         String fkTable = String.format( "\"%s\".\"%s\"", t[0], t[1] );
         t = fk.getTargetTable().split( "\\." );
         String pkTable = String.format( "\"%s\".\"%s\"", t[0], t[1] );
 
-        Result result;
         String sql = String.format( "ALTER TABLE %s ADD CONSTRAINT \"%s\" FOREIGN KEY (\"%s\") REFERENCES %s(\"%s\") ON UPDATE %s ON DELETE %s",
                 fkTable, fk.getFkName(), fk.getSourceColumn(), pkTable, fk.getTargetColumn(), fk.getOnUpdate(), fk.getOnDelete() );
-        try {
-            executeSqlUpdate( transaction, sql );
-            transaction.commit();
-            result = new Result( 1 ).setGeneratedQuery( sql );
-        } catch ( QueryExecutionException | TransactionException e ) {
-            log.error( "Caught exception while adding a foreign key", e );
-            result = new Result( e ).setGeneratedQuery( sql );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException ex ) {
-                log.error( "Could not rollback", ex );
-            }
-        }
-        return result;
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        Result<?, ?> res = LanguageCrud.anyQueryResult(
+                QueryContext.builder()
+                        .query( sql )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager )
+                        .build(), UIRequest.builder().build() ).get( 0 );
+        ctx.json( res );
     }
 
 
     /**
-     * Execute a logical plan coming from the Web-Ui plan builder
+     * Create or drop a namespace
      */
-    Result executeRelAlg( final RelAlgRequest request, Session session ) {
-        Transaction transaction = getTransaction( true );
-        transaction.getQueryAnalyzer().setSession( session );
-        Statement statement = transaction.createStatement();
-        long executionTime = 0;
-        long temp = 0;
+    void namespaceRequest( final Context ctx ) {
+        Namespace namespace = ctx.bodyAsClass( Namespace.class );
 
-        InformationManager queryAnalyzer = transaction.getQueryAnalyzer().observe( this );
-
-        RelNode result;
-        try {
-            temp = System.nanoTime();
-            result = QueryPlanBuilder.buildFromTree( request.topNode, statement );
-        } catch ( Exception e ) {
-            log.error( "Caught exception while building the plan builder tree", e );
-            return new Result( e );
+        if ( namespace.getType() == DataModel.GRAPH ) {
+            createGraph( namespace, ctx );
+            return;
         }
 
-        // Wrap RelNode into a RelRoot
-        final RelDataType rowType = result.getRowType();
-        final List<Pair<Integer, String>> fields = Pair.zip( ImmutableIntList.identity( rowType.getFieldCount() ), rowType.getFieldNames() );
-        final RelCollation collation =
-                result instanceof Sort
-                        ? ((Sort) result).collation
-                        : RelCollations.EMPTY;
-        RelRoot root = new RelRoot( result, result.getRowType(), SqlKind.SELECT, fields, collation );
+        DataModel type = namespace.getType();
 
-        // Prepare
-        PolyphenyDbSignature signature = statement.getQueryProcessor().prepareQuery( root );
+        // create namespace
+        if ( namespace.isCreate() && !namespace.isDrop() ) {
 
-        if ( request.createView ) {
-
-            String viewName = request.viewName;
-            boolean replace = false;
-            List<DataStore> store = null;
-            PlacementType placementType = store == null ? PlacementType.AUTOMATIC : PlacementType.MANUAL;
-
-            List<String> columns = new ArrayList<>();
-            root.rel.getRowType().getFieldList().forEach( f -> columns.add( f.getName() ) );
-
-            //default Schema
-            long schemaId = transaction.getDefaultSchema().id;
-
-            try {
-                DdlManager.getInstance().createView(
-                        viewName,
-                        schemaId,
-                        root.rel,
-                        root.collation,
-                        replace,
-                        statement,
-                        store,
-                        placementType,
-                        columns
-                );
-            } catch ( TableAlreadyExistsException | GenericCatalogException | UnknownColumnException e ) {
-                log.error( "Not possible to create View because the Name is already used", e );
-                Result finalResult = new Result( e );
-                finalResult.setGeneratedQuery( "Execute logical query plan" );
-                return finalResult;
-            }
-            try {
-                transaction.commit();
-            } catch ( TransactionException e ) {
-                log.error( "Caught exception while creating View from Planbuilder.", e );
-                try {
-                    transaction.rollback();
-                } catch ( TransactionException transactionException ) {
-                    log.error( "Exception while rollback", transactionException );
-                }
-                throw new RuntimeException( e );
+            StringBuilder query = new StringBuilder( "CREATE " );
+            if ( Objects.requireNonNull( namespace.getType() ) == DataModel.DOCUMENT ) {
+                query.append( "DOCUMENT " );
             }
 
-            return new Result().setGeneratedQuery( "Created View \"" + viewName + "\" from logical query plan" );
-        }
+            query.append( "NAMESPACE " );
 
-        List<List<Object>> rows;
-        try {
-            @SuppressWarnings("unchecked") final Iterable<Object> iterable = signature.enumerable( statement.getDataContext() );
-            Iterator<Object> iterator = iterable.iterator();
-            StopWatch stopWatch = new StopWatch();
-            stopWatch.start();
-            rows = MetaImpl.collect( signature.cursorFactory, LimitIterator.of( iterator, getPageSize() ), new ArrayList<>() );
-            stopWatch.stop();
-            signature.getExecutionTimeMonitor().setExecutionTime( stopWatch.getNanoTime() );
-        } catch ( Exception e ) {
-            log.error( "Caught exception while iterating the plan builder tree", e );
-            return new Result( e );
-        }
-
-        DbColumn[] header = new DbColumn[signature.columns.size()];
-        int counter = 0;
-        for ( ColumnMetaData col : signature.columns ) {
-            header[counter++] = new DbColumn( col.columnName,
-                    col.type.name,
-                    col.nullable == ResultSetMetaData.columnNullable,
-                    col.displaySize,
-                    null,
-                    null );
-        }
-
-        ArrayList<String[]> data = computeResultData( rows, Arrays.asList( header ), statement.getTransaction() );
-
-        try {
-            executionTime += System.nanoTime() - temp;
-            transaction.commit();
-        } catch ( TransactionException e ) {
-            log.error( "Caught exception while committing the plan builder tree", e );
-            try {
-                transaction.rollback();
-            } catch ( TransactionException transactionException ) {
-                log.error( "Exception while rollback", transactionException );
+            query.append( "\"" ).append( namespace.getName() ).append( "\"" );
+            if ( namespace.getAuthorization() != null && !namespace.getAuthorization().isEmpty() ) {
+                query.append( " AUTHORIZATION " ).append( namespace.getAuthorization() );
             }
-            throw new RuntimeException( e );
+            QueryLanguage language = QueryLanguage.from( "sql" );
+            Result<?, ?> res = LanguageCrud.anyQueryResult(
+                    QueryContext.builder()
+                            .query( query.toString() )
+                            .language( language )
+                            .origin( ORIGIN )
+                            .transactionManager( transactionManager )
+                            .build(), UIRequest.builder().build() ).get( 0 );
+            ctx.json( res );
         }
-        Result finalResult = new Result( header, data.toArray( new String[0][] ) ).setXid( transaction.getXid().toString() );
-
-        finalResult.setGeneratedQuery( "Execute logical query plan" );
-
-        if ( queryAnalyzer != null ) {
-            InformationPage p1 = new InformationPage( "Query analysis", "Analysis of the query." );
-            InformationGroup g1 = new InformationGroup( p1, "Execution time" );
-            InformationText text;
-            if ( executionTime < 1e4 ) {
-                text = new InformationText( g1, String.format( "Execution time: %d nanoseconds", signature ) );
-            } else {
-                long millis = TimeUnit.MILLISECONDS.convert( executionTime, TimeUnit.NANOSECONDS );
-                // format time: see: https://stackoverflow.com/questions/625433/how-to-convert-milliseconds-to-x-mins-x-seconds-in-java#answer-625444
-                //noinspection SuspiciousDateFormat
-                DateFormat df = new SimpleDateFormat( "m 'min' s 'sec' S 'ms'" );
-                String durationText = df.format( new Date( millis ) );
-                text = new InformationText( g1, String.format( "Execution time: %s", durationText ) );
+        // drop namespace
+        else if ( !namespace.isCreate() && namespace.isDrop() ) {
+            if ( type == null ) {
+                List<LogicalNamespace> namespaces = Catalog.snapshot().getNamespaces( new org.polypheny.db.catalog.logistic.Pattern( namespace.getName() ) );
+                assert namespaces.size() == 1;
             }
-            queryAnalyzer.addPage( p1 );
-            queryAnalyzer.addGroup( g1 );
-            queryAnalyzer.registerInformation( text );
-        }
 
-        return finalResult;
-    }
-
-
-    /**
-     * Create or drop a schema
-     */
-    Result schemaRequest( final Request req, final Response res ) {
-        Schema schema = this.gson.fromJson( req.body(), Schema.class );
-        Transaction transaction = getTransaction();
-
-        // create schema
-        if ( schema.isCreate() && !schema.isDrop() ) {
-            StringBuilder query = new StringBuilder( "CREATE SCHEMA " );
-            query.append( "\"" ).append( schema.getName() ).append( "\"" );
-            if ( schema.getAuthorization() != null && !schema.getAuthorization().equals( "" ) ) {
-                query.append( " AUTHORIZATION " ).append( schema.getAuthorization() );
-            }
-            try {
-                int rows = executeSqlUpdate( transaction, query.toString() );
-                transaction.commit();
-                return new Result( rows );
-            } catch ( QueryExecutionException | TransactionException e ) {
-                log.error( "Caught exception while creating a schema", e );
-                try {
-                    transaction.rollback();
-                } catch ( TransactionException ex ) {
-                    log.error( "Could not rollback", ex );
-                }
-                return new Result( e );
-            }
-        }
-        // drop schema
-        else if ( !schema.isCreate() && schema.isDrop() ) {
-            StringBuilder query = new StringBuilder( "DROP SCHEMA " );
-            query.append( "\"" ).append( schema.getName() ).append( "\"" );
-            if ( schema.isCascade() ) {
+            StringBuilder query = new StringBuilder( "DROP NAMESPACE " );
+            query.append( "\"" ).append( namespace.getName() ).append( "\"" );
+            if ( namespace.isCascade() ) {
                 query.append( " CASCADE" );
             }
-            try {
-                int rows = executeSqlUpdate( transaction, query.toString() );
-                transaction.commit();
-                return new Result( rows );
-            } catch ( TransactionException | QueryExecutionException e ) {
-                log.error( "Caught exception while dropping a schema", e );
-                try {
-                    transaction.rollback();
-                } catch ( TransactionException ex ) {
-                    log.error( "Could not rollback", ex );
-                }
-                return new Result( e );
-            }
+            QueryLanguage language = QueryLanguage.from( "sql" );
+            Result<?, ?> res = LanguageCrud.anyQueryResult(
+                    QueryContext.builder()
+                            .query( query.toString() )
+                            .language( language )
+                            .origin( ORIGIN )
+                            .transactionManager( transactionManager )
+                            .build(), UIRequest.builder().build() ).get( 0 );
+            ctx.json( res );
         } else {
-            return new Result( "Neither the field 'create' nor the field 'drop' was set." );
+            ctx.json( RelationalResult.builder().error( "Neither the field 'create' nor the field 'drop' was set." ).build() );
         }
+    }
+
+
+    private void createGraph( Namespace namespace, Context ctx ) {
+        QueryLanguage cypher = QueryLanguage.from( "cypher" );
+        QueryContext context = QueryContext.builder()
+                .query( "CREATE DATABASE " + namespace.getName() + " ON STORE " + namespace.getStore() )
+                .language( cypher )
+                .origin( ORIGIN )
+                .transactionManager( transactionManager )
+                .build();
+        ctx.json( LanguageCrud.anyQueryResult( context, UIRequest.builder().build() ).get( 0 ) );
     }
 
 
     /**
      * Get all supported data types of the DBMS.
      */
-    public String getTypeInfo( final Request req, final Response res ) {
-        GsonBuilder gsonBuilder = new GsonBuilder().registerTypeAdapter( PolyType.class, PolyType.serializer );
-        Gson gson = gsonBuilder.create();
-        return gson.toJson( PolyType.availableTypes().toArray( new PolyType[0] ), PolyType[].class );
+    public void getTypeInfo( final Context ctx ) {
+        ctx.json( PolyType.allowedFieldTypes().stream().map( PolyTypeModel::from ).toList() );
     }
 
 
     /**
      * Get available actions for foreign key constraints
      */
-    String[] getForeignKeyActions( Request req, Response res ) {
-        ForeignKeyOption[] options = Catalog.ForeignKeyOption.values();
+    void getForeignKeyActions( final Context ctx ) {
+        ForeignKeyOption[] options = ForeignKeyOption.values();
         String[] arr = new String[options.length];
         for ( int i = 0; i < options.length; i++ ) {
             arr[i] = options[i].name();
         }
-        return arr;
+        ctx.json( arr );
     }
 
 
@@ -2971,8 +2454,8 @@ public class Crud implements InformationObserver {
      * Send updates to the UI if Information objects in the query analyzer change.
      */
     @Override
-    public void observeInfos( final Information info, final String analyzerId, final Session session ) {
-        WebSocket.sendMessage( session, info.asJson() );
+    public void observeInfos( final String infoAsJson, final String analyzerId, final Session session ) {
+        WebSocket.sendMessage( session, infoAsJson );
     }
 
 
@@ -2981,362 +2464,38 @@ public class Crud implements InformationObserver {
      */
     @Override
     public void observePageList( final InformationPage[] pages, final String analyzerId, final Session session ) {
-        ArrayList<SidebarElement> nodes = new ArrayList<>();
+        List<SidebarElement> nodes = new ArrayList<>();
         for ( InformationPage page : pages ) {
-            nodes.add( new SidebarElement( page.getId(), page.getName(), analyzerId + "/", page.getIcon() ).setLabel( page.getLabel() ) );
+            nodes.add( new SidebarElement( page.getId(), page.getName(), DataModel.RELATIONAL, analyzerId + "/", page.getIcon() ).setLabel( page.getLabel() ) );
         }
-        WebSocket.sendMessage( session, this.gson.toJson( nodes.toArray( new SidebarElement[0] ) ) );
+        WebSocket.sendMessage( session, gson.toJson( nodes.toArray( new SidebarElement[0] ) ) );
     }
 
 
     /**
      * Get the content of an InformationPage of a query analyzer.
      */
-    public String getAnalyzerPage( final Request req, final Response res ) {
-        String[] params = this.gson.fromJson( req.body(), String[].class );
-        return InformationManager.getInstance( params[0] ).getPage( params[1] ).asJson();
+    public void getAnalyzerPage( final Context ctx ) {
+        String[] params = ctx.bodyAsClass( String[].class );
+        ctx.json( InformationManager.getInstance( params[0] ).getPage( params[1] ) );
     }
 
 
-    /**
-     * Import a dataset from Polypheny-Hub into Polypheny-DB
-     */
-    HubResult importDataset( final spark.Request req, final spark.Response res ) {
-        HubRequest request = this.gson.fromJson( req.body(), HubRequest.class );
-        String error = null;
-
-        String randomFileName = UUID.randomUUID().toString();
-        final String sysTempDir = System.getProperty( "java.io.tmpdir" );
-        final File tempDir = new File( sysTempDir + File.separator + "hub" + File.separator + randomFileName + File.separator );
-        if ( !tempDir.mkdirs() ) { // create folder
-            log.error( "Unable to create temp folder: {}", tempDir.getAbsolutePath() );
-            return new HubResult( "Unable to create temp folder" );
-        }
-
-        // see: https://www.baeldung.com/java-download-file
-        final File zipFile = new File( tempDir, "import.zip" );
-        Transaction transaction = null;
-        try (
-                BufferedInputStream in = new BufferedInputStream( new URL( request.url ).openStream() );
-                FileOutputStream fos = new FileOutputStream( zipFile )
-        ) {
-            byte[] dataBuffer = new byte[1024];
-            int bytesRead;
-            while ( (bytesRead = in.read( dataBuffer, 0, 1024 )) != -1 ) {
-                fos.write( dataBuffer, 0, bytesRead );
-            }
-
-            // extract zip, see https://www.baeldung.com/java-compress-and-uncompress
-            dataBuffer = new byte[1024];
-            final File extractedFolder = new File( tempDir, "import" );
-            if ( !extractedFolder.mkdirs() ) {
-                log.error( "Unable to create folder for extracting files: {}", tempDir.getAbsolutePath() );
-                return new HubResult( "Unable to create folder for extracting files" );
-            }
-            try ( ZipInputStream zis = new ZipInputStream( new FileInputStream( zipFile ) ) ) {
-                ZipEntry zipEntry = zis.getNextEntry();
-                while ( zipEntry != null ) {
-                    File newFile = new File( extractedFolder, zipEntry.getName() );
-                    try ( FileOutputStream fosEntry = new FileOutputStream( newFile ) ) {
-                        int len;
-                        while ( (len = zis.read( dataBuffer )) > 0 ) {
-                            fosEntry.write( dataBuffer, 0, len );
-                        }
-                    }
-                    zipEntry = zis.getNextEntry();
-                }
-            }
-
-            // delete .zip after unzipping
-            if ( !zipFile.delete() ) {
-                log.error( "Unable to delete zip file: {}", zipFile.getAbsolutePath() );
-            }
-
-            transaction = getTransaction();
-
-            Status status = new Status( "tableImport", request.tables.size() );
-            int ithTable = 0;
-            for ( TableMapping m : request.tables.values() ) {
-                //create table from json
-                Path jsonPath = Paths.get( new File( extractedFolder, m.initialName + ".json" ).getPath() );
-                String json = new String( Files.readAllBytes( jsonPath ), StandardCharsets.UTF_8 );
-                JsonTable table = gson.fromJson( json, JsonTable.class );
-                String newName = m.newName != null ? m.newName : table.tableName;
-                assert (table.tableName.equals( m.initialName ));
-                HubResult createdTableError = createTableFromJson( json, newName, request, transaction );
-                if ( createdTableError != null ) {
-                    transaction.rollback();
-                    return createdTableError;
-                    //todo check
-                }
-                // import data from .csv file
-                importCsvFile( m.initialName + ".csv", table, transaction, extractedFolder, request, newName, status, ithTable++ );
-            }
-
-            transaction.commit();
-
-        } catch ( IOException | TransactionException e ) {
-            log.error( "Could not import dataset", e );
-            error = "Could not import dataset" + e.getMessage();
-            if ( transaction != null ) {
-                try {
-                    transaction.rollback();
-                } catch ( TransactionException ex ) {
-                    log.error( "Caught exception while rolling back transaction", e );
-                }
-            }
-        } catch ( QueryExecutionException e ) {
-            log.error( "Could not create table from imported json file", e );
-            error = "Could not create table from imported json file" + e.getMessage();
-            if ( transaction != null ) {
-                try {
-                    transaction.rollback();
-                } catch ( TransactionException ex ) {
-                    log.error( "Caught exception while rolling back transaction", e );
-                }
-            }
-            //} catch ( CsvValidationException | GenericCatalogException e ) {
-        } finally {
-            // delete temp folder
-            if ( !deleteDirectory( tempDir ) ) {
-                log.error( "Unable to delete temp folder: {}", tempDir.getAbsolutePath() );
-            }
-        }
-
-        if ( error != null ) {
-            return new HubResult( error );
-        } else {
-            return new HubResult().setMessage( String.format( "Imported dataset into table %s on store %s", request.schema, request.store ) );
-        }
+    void getFile( final Context ctx ) {
+        getFile( ctx, "tmp", true );
     }
 
 
-    private HubResult createTableFromJson( final String json, final String newName, final HubRequest request, final Transaction transaction ) throws QueryExecutionException {
-        // create table from .json file
-        List<CatalogTable> tablesInSchema = catalog.getTables( new Catalog.Pattern( this.databaseName ), new Catalog.Pattern( request.schema ), null );
-        int tableAlreadyExists = (int) tablesInSchema.stream().filter( t -> t.name.equals( newName ) ).count();
-        if ( tableAlreadyExists > 0 ) {
-            return new HubResult( String.format( "Cannot import the dataset since the schema '%s' already contains a table with the name '%s'", request.schema, newName ) );
-        }
-
-        String createTable = SchemaToJsonMapper.getCreateTableStatementFromJson( json, request.createPks, request.defaultValues, request.schema, newName, request.store );
-        executeSqlUpdate( transaction, createTable );
-        return null;
-    }
-
-
-    private void importCsvFile( final String csvFileName, final JsonTable table, final Transaction transaction, final File extractedFolder, final HubRequest request, final String tableName, final Status status, final int ithTable ) throws IOException, QueryExecutionException {
-        StringJoiner columnJoiner = new StringJoiner( ",", "(", ")" );
-        for ( JsonColumn col : table.getColumns() ) {
-            columnJoiner.add( "\"" + col.columnName + "\"" );
-        }
-        String columns = columnJoiner.toString();
-        StringJoiner valueJoiner = new StringJoiner( ",", "VALUES", "" );
-        StringJoiner rowJoiner;
-
-        //see https://www.callicoder.com/java-read-write-csv-file-opencsv/
-
-        final int BATCH_SIZE = RuntimeConfig.HUB_IMPORT_BATCH_SIZE.getInteger();
-        long csvCounter = 0;
-        try (
-                Reader reader = new BufferedReader( new FileReader( new File( extractedFolder, csvFileName ) ) );
-                CSVReader csvReader = new CSVReader( reader )
-        ) {
-            long lineCount = Files.lines( new File( extractedFolder, csvFileName ).toPath() ).count();
-            String[] nextRecord;
-            while ( (nextRecord = csvReader.readNext()) != null ) {
-                rowJoiner = new StringJoiner( ",", "(", ")" );
-                for ( int i = 0; i < table.getColumns().size(); i++ ) {
-                    if ( PolyType.get( table.getColumns().get( i ).type ).getFamily() == PolyTypeFamily.CHARACTER ) {
-                        rowJoiner.add( "'" + StringEscapeUtils.escapeSql( nextRecord[i] ) + "'" );
-                    } else if ( PolyType.get( table.getColumns().get( i ).type ) == PolyType.DATE ) {
-                        rowJoiner.add( "date '" + StringEscapeUtils.escapeSql( nextRecord[i] ) + "'" );
-                    } else if ( PolyType.get( table.getColumns().get( i ).type ) == PolyType.TIME ) {
-                        rowJoiner.add( "time '" + StringEscapeUtils.escapeSql( nextRecord[i] ) + "'" );
-                    } else if ( PolyType.get( table.getColumns().get( i ).type ) == PolyType.TIMESTAMP ) {
-                        rowJoiner.add( "timestamp '" + StringEscapeUtils.escapeSql( nextRecord[i] ) + "'" );
-                    } else {
-                        rowJoiner.add( nextRecord[i] );
-                    }
-                }
-                valueJoiner.add( rowJoiner.toString() );
-                csvCounter++;
-                if ( csvCounter % BATCH_SIZE == 0 && csvCounter != 0 ) {
-                    String insertQuery = String.format( "INSERT INTO \"%s\".\"%s\" %s %s", request.schema, tableName, columns, valueJoiner.toString() );
-                    executeSqlUpdate( transaction, insertQuery );
-                    valueJoiner = new StringJoiner( ",", "VALUES", "" );
-                    status.setStatus( csvCounter, lineCount, ithTable );
-                    WebSocket.broadcast( gson.toJson( status, Status.class ) );
-                }
-            }
-            if ( csvCounter % BATCH_SIZE != 0 ) {
-                String insertQuery = String.format( "INSERT INTO \"%s\".\"%s\" %s %s", request.schema, tableName, columns, valueJoiner.toString() );
-                executeSqlUpdate( transaction, insertQuery );
-                status.setStatus( csvCounter, lineCount, ithTable );
-                WebSocket.broadcast( gson.toJson( status, Status.class ) );
-            }
-        }
-    }
-
-
-    /**
-     * Export a table into a .zip consisting of a json file containing information of the table and columns and a csv files with the data
-     */
-    Result exportTable( final Request req, final Response res ) {
-        HubRequest request = gson.fromJson( req.body(), HubRequest.class );
-        Transaction transaction = getTransaction( false );
-        Statement statement = transaction.createStatement();
-        HubMeta metaData = new HubMeta( request.schema );
-
-        String randomFileName = UUID.randomUUID().toString();
-        final Charset charset = StandardCharsets.UTF_8;
-        final String sysTempDir = System.getProperty( "java.io.tmpdir" );
-        final File tempDir = new File( sysTempDir + File.separator + "hub" + File.separator + randomFileName + File.separator );
-        if ( !tempDir.mkdirs() ) { // create folder
-            log.error( "Unable to create temp folder: {}", tempDir.getAbsolutePath() );
-            return new Result( "Unable to create temp folder" );
-        }
-        File tableFile;
-        File catalogFile;
-        ArrayList<File> tableFiles = new ArrayList<>();
-        ArrayList<File> catalogFiles = new ArrayList<>();
-        final int BATCH_SIZE = RuntimeConfig.HUB_IMPORT_BATCH_SIZE.getInteger();
-        int ithTable = 0;
-        Status status = new Status( "tableExport", request.tables.size() );
-        try {
-            for ( TableMapping table : request.tables.values() ) {
-                tableFile = new File( tempDir, table.initialName + ".csv" );
-                catalogFile = new File( tempDir, table.initialName + ".json" );
-                tableFiles.add( tableFile );
-                catalogFiles.add( catalogFile );
-                OutputStreamWriter catalogWriter = new OutputStreamWriter( new FileOutputStream( catalogFile ), charset );
-                FileOutputStream tableStream = new FileOutputStream( tableFile );
-                log.info( String.format( "Exporting %s.%s", request.schema, table.initialName ) );
-                CatalogTable catalogTable = catalog.getTable( this.databaseName, request.schema, table.initialName );
-
-                catalogWriter.write( SchemaToJsonMapper.exportTableDefinitionAsJson( catalogTable, request.createPks, request.defaultValues ) );
-                catalogWriter.flush();
-                catalogWriter.close();
-
-                String query = String.format( "SELECT * FROM \"%s\".\"%s\"", request.schema, table.initialName );
-                // TODO use iterator instead of Result
-                Result tableData = executeSqlSelect( statement, new UIRequest(), query, true );
-
-                int totalRows = tableData.getData().length;
-                int counter = 0;
-                for ( String[] row : tableData.getData() ) {
-                    int cols = row.length;
-                    for ( int i = 0; i < cols; i++ ) {
-                        if ( row[i].contains( "\n" ) ) {
-                            String line = String.format( "\"%s\"", row[i] );
-                            tableStream.write( line.getBytes( charset ) );
-                        } else {
-                            tableStream.write( row[i].getBytes( charset ) );
-                        }
-                        if ( i != cols - 1 ) {
-                            tableStream.write( ",".getBytes( charset ) );
-                        } else {
-                            tableStream.write( "\n".getBytes( charset ) );
-                        }
-                    }
-                    counter++;
-                    if ( counter % BATCH_SIZE == 0 ) {
-                        status.setStatus( counter, totalRows, ithTable );
-                        WebSocket.broadcast( gson.toJson( status, Status.class ) );
-                    }
-                }
-                status.setStatus( counter, totalRows, ithTable );
-                WebSocket.broadcast( gson.toJson( status, Status.class ) );
-                tableStream.flush();
-                tableStream.close();
-                metaData.addTable( table.initialName, counter );
-                ithTable++;
-            }
-            status.complete();
-
-            File zipFile = new File( tempDir, "table.zip" );
-            FileOutputStream zipStream = new FileOutputStream( zipFile );
-            //from https://www.baeldung.com/java-compress-and-uncompress
-            ArrayList<File> allFiles = new ArrayList<>( tableFiles );
-            allFiles.addAll( catalogFiles );
-            try ( ZipOutputStream zipOut = new ZipOutputStream( zipStream, charset ) ) {
-                for ( File fileToZip : allFiles ) {
-                    try ( FileInputStream fis = new FileInputStream( fileToZip ) ) {
-                        ZipEntry zipEntry = new ZipEntry( fileToZip.getName() );
-                        zipOut.putNextEntry( zipEntry );
-
-                        byte[] bytes = new byte[1024];
-                        int length;
-                        while ( (length = fis.read( bytes )) >= 0 ) {
-                            zipOut.write( bytes, 0, length );
-                        }
-                    }
-                }
-                zipOut.finish();
-            }
-            zipStream.close();
-
-            metaData.setFileSize( zipFile.length() );
-            File metaFile = new File( tempDir, "meta.json" );
-            FileOutputStream metaOutputStream = new FileOutputStream( metaFile );
-            metaOutputStream.write( gson.toJson( metaData, HubMeta.class ).getBytes() );
-            metaOutputStream.flush();
-            metaOutputStream.close();
-
-            //send file to php backend using Unirest
-            HttpResponse<String> jsonResponse = Unirest.post( request.hubLink )
-                    .field( "action", "uploadDataset" )
-                    .field( "userId", String.valueOf( request.userId ) )
-                    .field( "secret", request.secret )
-                    .field( "name", request.name )
-                    .field( "description", request.description )
-                    .field( "pub", String.valueOf( request.pub ) )
-                    .field( "dataset", zipFile )
-                    .field( "metaData", metaFile )
-                    .asString();
-
-            // Get result
-            String resultString = jsonResponse.getBody();
-            log.info( String.format( "Exported %s.[%s]", request.schema, request.tables.values().stream().map( n -> n.initialName ).collect( Collectors.joining( "," ) ) ) );
-
-            try {
-                return gson.fromJson( resultString, Result.class );
-            } catch ( JsonSyntaxException e ) {
-                return new Result( resultString );
-            }
-        } catch ( IOException e ) {
-            log.error( "Failed to write temporary file", e );
-            return new Result( "Failed to write temporary file" );
-        } catch ( Exception e ) {
-            log.error( "Error while exporting table", e );
-            return new Result( "Error while exporting table" );
-        } finally {
-            // delete temp folder
-            if ( !deleteDirectory( tempDir ) ) {
-                log.error( "Unable to delete temp folder: {}", tempDir.getAbsolutePath() );
-            }
-            try {
-                transaction.commit();
-            } catch ( TransactionException e ) {
-                log.error( "Error while fetching table", e );
-                try {
-                    transaction.rollback();
-                } catch ( TransactionException transactionException ) {
-                    log.error( "Exception while rollback", transactionException );
-                }
-            }
-        }
-    }
-
-
-    String getFile( final Request req, final Response res ) {
-        String fileName = req.params( "file" );
-        File f = new File( System.getProperty( "user.home" ), ".polypheny/tmp/" + fileName );
+    private File getFile( Context ctx, String location, boolean sendBack ) {
+        String fileName = ctx.pathParam( "file" );
+        File folder = PolyphenyHomeDirManager.getInstance().registerNewFolder( location );
+        File f = PolyphenyHomeDirManager.getInstance().registerNewFile( folder, fileName );
         if ( !f.exists() ) {
-            res.status( 404 );
-            return "";
+            ctx.status( 404 );
+            ctx.result( "" );
+            return f;
         } else if ( f.isDirectory() ) {
-            return getDirectory( f, res );
+            getDirectory( f, ctx );
         }
         ContentInfoUtil util = new ContentInfoUtil();
         ContentInfo info = null;
@@ -3345,20 +2504,20 @@ public class Crud implements InformationObserver {
         } catch ( IOException ignored ) {
         }
         if ( info != null && info.getMimeType() != null ) {
-            res.header( "Content-Type", info.getMimeType() );
+            ctx.contentType( info.getMimeType() );
         } else {
-            res.header( "Content-Type", "application/octet-stream" );
+            ctx.contentType( "application/octet-stream" );
         }
         if ( info != null && info.getFileExtensions() != null && info.getFileExtensions().length > 0 ) {
-            res.header( "Content-Disposition", "attachment; filename=" + "file." + info.getFileExtensions()[0] );
+            ctx.header( "Content-Disposition", "attachment; filename=" + "file." + info.getFileExtensions()[0] );
         } else {
-            res.header( "Content-Disposition", "attachment; filename=" + "file" );
+            ctx.header( "Content-Disposition", "attachment; filename=" + "file" );
         }
         long fileLength = f.length();
-        String range = req.headers( "Range" );
+        String range = ctx.req.getHeader( "Range" );
         if ( range != null ) {
-            long rangeStart;
-            long rangeEnd;
+            long rangeStart = 0;
+            long rangeEnd = 0;
             Pattern pattern = Pattern.compile( "bytes=(\\d*)-(\\d*)" );
             Matcher m = pattern.matcher( range );
             if ( m.find() && m.groupCount() == 2 ) {
@@ -3366,29 +2525,31 @@ public class Crud implements InformationObserver {
                 String group2 = m.group( 2 );
                 //chrome and firefox send "bytes=0-"
                 //safari sends "bytes=0-1" to get the file length and then bytes=0-fileLength
-                if ( group2 != null && !group2.equals( "" ) ) {
+                if ( group2 != null && !group2.isEmpty() ) {
                     rangeEnd = Long.parseLong( group2 );
                 } else {
                     rangeEnd = Math.min( rangeStart + 10_000_000L, fileLength - 1 );
                 }
                 if ( rangeEnd >= fileLength ) {
-                    res.status( 416 );//range not satisfiable
-                    return "";
+                    ctx
+                            .status( 416 )//range not satisfiable
+                            .result( "" );
                 }
             } else {
-                res.status( 416 );//range not satisfiable
-                return "";
+                ctx
+                        .status( 416 )//range not satisfiable
+                        .json( "" );
             }
             try {
                 //see https://github.com/dessalines/torrenttunes-client/blob/master/src/main/java/com/torrenttunes/client/webservice/Platform.java
-                res.header( "Accept-Ranges", "bytes" );
-                res.status( 206 );//partial content
+                ctx.res.setHeader( "Accept-Ranges", "bytes" );
+                ctx.status( 206 );//partial content
                 int len = Long.valueOf( rangeEnd - rangeStart ).intValue() + 1;
-                res.header( "Content-Range", String.format( "bytes %d-%d/%d", rangeStart, rangeEnd, fileLength ) );
+                ctx.res.setHeader( "Content-Range", String.format( "bytes %d-%d/%d", rangeStart, rangeEnd, fileLength ) );
 
                 RandomAccessFile raf = new RandomAccessFile( f, "r" );
                 raf.seek( rangeStart );
-                ServletOutputStream os = res.raw().getOutputStream();
+                ServletOutputStream os = ctx.res.getOutputStream();
                 byte[] buf = new byte[256];
                 while ( len > 0 ) {
                     int read = raf.read( buf, 0, Math.min( buf.length, len ) );
@@ -3399,41 +2560,54 @@ public class Crud implements InformationObserver {
                 os.close();
                 raf.close();
             } catch ( IOException ignored ) {
-                res.status( 500 );
+                ctx.status( 500 );
             }
         } else {
-            res.header( "Content-Length", String.valueOf( fileLength ) );
-            try ( FileInputStream fis = new FileInputStream( f ); ServletOutputStream os = res.raw().getOutputStream() ) {
-                IOUtils.copyLarge( fis, os );
-                os.flush();
-            } catch ( IOException ignored ) {
-                res.status( 500 );
+            if ( sendBack ) {
+                ctx.res.setContentLengthLong( (int) fileLength );
+                try ( FileInputStream fis = new FileInputStream( f ); ServletOutputStream os = ctx.res.getOutputStream() ) {
+                    IOUtils.copyLarge( fis, os );
+                    os.flush();
+                } catch ( IOException ignored ) {
+                    ctx.status( 500 );
+                }
             }
         }
-        return "";
+        ctx.result( "" );
+
+        return f;
     }
 
 
-    String getDirectory( File dir, Response res ) {
-        res.header( "Content-Type", "application/zip" );
-        res.header( "Content-Disposition", "attachment; filename=" + dir.getName() + ".zip" );
-        String zipFileName = UUID.randomUUID().toString() + ".zip";
+    void getDirectory( File dir, Context ctx ) {
+        ctx.header( "Content-ExpressionType", "application/zip" );
+        ctx.header( "Content-Disposition", "attachment; filename=" + dir.getName() + ".zip" );
+        String zipFileName = UUID.randomUUID() + ".zip";
         File zipFile = new File( System.getProperty( "user.home" ), ".polypheny/tmp/" + zipFileName );
         try ( ZipOutputStream zipOut = new ZipOutputStream( Files.newOutputStream( zipFile.toPath() ) ) ) {
             zipDirectory( "", dir, zipOut );
         } catch ( IOException e ) {
-            res.status( 500 );
+            ctx.status( 500 );
             log.error( "Could not zip directory", e );
         }
-        res.header( "Content-Length", String.valueOf( zipFile.length() ) );
-        try ( OutputStream os = res.raw().getOutputStream(); InputStream is = new FileInputStream( zipFile ) ) {
+        ctx.res.setContentLengthLong( zipFile.length() );
+        try ( OutputStream os = ctx.res.getOutputStream(); InputStream is = new FileInputStream( zipFile ) ) {
             IOUtils.copy( is, os );
         } catch ( IOException e ) {
             log.error( "Could not write zipOutputStream to response", e );
-            res.status( 500 );
+            ctx.status( 500 );
         }
         zipFile.delete();
-        return "";
+        ctx.result( "" );
+    }
+
+
+    void getCatalog( final Context ctx ) {
+        // Assigning the result to a variable causes an error when the switch expression is not exhaustive
+        Context ignore = switch ( Catalog.mode ) {
+            case PRODUCTION -> ctx.status( HttpCode.FORBIDDEN ).result( "Forbidden" );
+            case DEVELOPMENT, BENCHMARK, TEST -> ctx.json( Catalog.getInstance().getJson() );
+        };
     }
 
     // -----------------------------------------------------------------------
@@ -3442,390 +2616,33 @@ public class Crud implements InformationObserver {
 
 
     /**
-     * Execute a select statement with default limit
-     */
-    private Result executeSqlSelect( final Statement statement, final UIRequest request, final String sqlSelect ) throws QueryExecutionException {
-        return executeSqlSelect( statement, request, sqlSelect, false );
-    }
-
-
-    private Result executeSqlSelect( final Statement statement, final UIRequest request, final String sqlSelect, final boolean noLimit ) throws QueryExecutionException {
-        PolyphenyDbSignature signature;
-        List<List<Object>> rows;
-        Iterator<Object> iterator = null;
-        boolean hasMoreRows = false;
-        try {
-            signature = processQuery( statement, sqlSelect );
-            final Enumerable enumerable = signature.enumerable( statement.getDataContext() );
-            //noinspection unchecked
-            iterator = enumerable.iterator();
-            StopWatch stopWatch = new StopWatch();
-            stopWatch.start();
-            if ( noLimit ) {
-                rows = MetaImpl.collect( signature.cursorFactory, iterator, new ArrayList<>() );
-            } else {
-                rows = MetaImpl.collect( signature.cursorFactory, LimitIterator.of( iterator, getPageSize() ), new ArrayList<>() );
-            }
-            hasMoreRows = iterator.hasNext();
-            stopWatch.stop();
-            signature.getExecutionTimeMonitor().setExecutionTime( stopWatch.getNanoTime() );
-        } catch ( Throwable t ) {
-            if ( statement.getTransaction().isAnalyze() ) {
-                InformationManager analyzer = statement.getTransaction().getQueryAnalyzer();
-                InformationPage exceptionPage = new InformationPage( "Stacktrace" ).fullWidth();
-                InformationGroup exceptionGroup = new InformationGroup( exceptionPage.getId(), "Stacktrace" );
-                InformationStacktrace exceptionElement = new InformationStacktrace( t, exceptionGroup );
-                analyzer.addPage( exceptionPage );
-                analyzer.addGroup( exceptionGroup );
-                analyzer.registerInformation( exceptionElement );
-            }
-            if ( iterator != null ) {
-                try {
-                    if ( iterator instanceof AutoCloseable ) {
-                        ((AutoCloseable) iterator).close();
-                    }
-                } catch ( Exception e ) {
-                    log.error( "Exception while closing result iterator", e );
-                }
-            }
-            throw new QueryExecutionException( t );
-        }
-
-        try {
-            TableType tableType = null;
-            CatalogTable catalogTable = null;
-            if ( request.tableId != null ) {
-                String[] t = request.tableId.split( "\\." );
-                try {
-                    catalogTable = catalog.getTable( this.databaseName, t[0], t[1] );
-                    tableType = catalogTable.tableType;
-                } catch ( UnknownTableException | UnknownDatabaseException | UnknownSchemaException e ) {
-                    log.error( "Caught exception", e );
-                }
-            }
-
-            ArrayList<DbColumn> header = new ArrayList<>();
-            for ( ColumnMetaData metaData : signature.columns ) {
-                String columnName = metaData.columnName;
-
-                String filter = "";
-                if ( request.filter != null && request.filter.containsKey( columnName ) ) {
-                    filter = request.filter.get( columnName );
-                }
-
-                SortState sort;
-                if ( request.sortState != null && request.sortState.containsKey( columnName ) ) {
-                    sort = request.sortState.get( columnName );
-                } else {
-                    sort = new SortState();
-                }
-
-                DbColumn dbCol = new DbColumn(
-                        metaData.columnName,
-                        metaData.type.name,
-                        metaData.nullable == ResultSetMetaData.columnNullable,
-                        metaData.displaySize,
-                        sort,
-                        filter );
-
-                // Get column default values
-                if ( catalogTable != null ) {
-                    try {
-                        if ( catalog.checkIfExistsColumn( catalogTable.id, columnName ) ) {
-                            CatalogColumn catalogColumn = catalog.getColumn( catalogTable.id, columnName );
-                            if ( catalogColumn.defaultValue != null ) {
-                                dbCol.defaultValue = catalogColumn.defaultValue.value;
-                            }
-                        }
-                    } catch ( UnknownColumnException e ) {
-                        log.error( "Caught exception", e );
-                    }
-                }
-                header.add( dbCol );
-            }
-
-            ArrayList<String[]> data = computeResultData( rows, header, statement.getTransaction() );
-
-            if ( tableType != null ) {
-                return new Result( header.toArray( new DbColumn[0] ), data.toArray( new String[0][] ) ).setAffectedRows( data.size() ).setHasMoreRows( hasMoreRows );
-            } else {
-                //if we do not have a fix table it is not possible to change anything within the resultSet therefore we use TableType.SOURCE
-                return new Result( header.toArray( new DbColumn[0] ), data.toArray( new String[0][] ) ).setAffectedRows( data.size() ).setHasMoreRows( hasMoreRows );
-            }
-
-        } finally {
-            try {
-                if ( iterator instanceof AutoCloseable ) {
-                    ((AutoCloseable) iterator).close();
-                }
-            } catch ( Exception e ) {
-                log.error( "Exception while closing result iterator", e );
-            }
-        }
-    }
-
-
-    /**
-     * Convert data from a query result to Strings readable in the UI
-     *
-     * @param rows Rows from the enumerable iterator
-     * @param header Header from the UI-ResultSet
-     */
-    ArrayList<String[]> computeResultData( final List<List<Object>> rows, final List<DbColumn> header, final Transaction transaction ) {
-        ArrayList<String[]> data = new ArrayList<>();
-        for ( List<Object> row : rows ) {
-            String[] temp = new String[row.size()];
-            int counter = 0;
-            for ( Object o : row ) {
-                if ( o == null ) {
-                    temp[counter] = null;
-                } else {
-                    switch ( header.get( counter ).dataType ) {
-                        case "TIMESTAMP":
-                            if ( o instanceof Long ) {
-                                temp[counter] = DateTimeStringUtils.longToAdjustedString( (long) o, PolyType.TIMESTAMP );// TimestampString.fromMillisSinceEpoch( (long) o ).toString();
-                            } else {
-                                temp[counter] = o.toString();
-                            }
-                            break;
-                        case "DATE":
-                            if ( o instanceof Integer ) {
-                                temp[counter] = DateTimeStringUtils.longToAdjustedString( (int) o, PolyType.DATE );//DateString.fromDaysSinceEpoch( (int) o ).toString();
-                            } else {
-                                temp[counter] = o.toString();
-                            }
-                            break;
-                        case "TIME":
-                            if ( o instanceof Integer ) {
-                                temp[counter] = DateTimeStringUtils.longToAdjustedString( (int) o, PolyType.TIME );//TimeString.fromMillisOfDay( (int) o ).toString();
-                            } else {
-                                temp[counter] = o.toString();
-                            }
-                            break;
-                        case "FILE":
-                        case "IMAGE":
-                        case "SOUND":
-                        case "VIDEO":
-                            String columnName = String.valueOf( header.get( counter ).name.hashCode() );
-                            File mmFolder = new File( System.getProperty( "user.home" ), ".polypheny/tmp" );
-                            mmFolder.mkdirs();
-                            ContentInfoUtil util = new ContentInfoUtil();
-                            if ( o instanceof File ) {
-                                File f = ((File) o);
-                                try {
-                                    ContentInfo info = null;
-                                    if ( !f.isDirectory() ) {
-                                        info = util.findMatch( f );
-                                    }
-                                    String extension = "";
-                                    if ( info != null && info.getFileExtensions() != null && info.getFileExtensions().length > 0 ) {
-                                        extension = "." + info.getFileExtensions()[0];
-                                    }
-                                    File newLink = new File( mmFolder, columnName + "_" + f.getName() + extension );
-                                    newLink.delete();//delete to override
-                                    Path added;
-                                    if ( f.isDirectory() && transaction.getInvolvedAdapters().stream().anyMatch( a -> a.getAdapterName().equals( "QFS" ) ) ) {
-                                        added = Files.createSymbolicLink( newLink.toPath(), f.toPath() );
-                                    } else if ( RuntimeConfig.UI_USE_HARDLINKS.getBoolean() && !f.isDirectory() ) {
-                                        added = Files.createLink( newLink.toPath(), f.toPath() );
-                                    } else {
-                                        added = Files.copy( f.toPath(), newLink.toPath() );
-                                        //added = Files.createSymbolicLink( newLink.toPath(), f.toPath() );
-                                    }
-                                    TemporalFileManager.addPath( transaction.getXid().toString(), added );
-                                    temp[counter] = newLink.getName();
-                                } catch ( Exception e ) {
-                                    throw new RuntimeException( "Could not create link to mm file " + f.getAbsolutePath(), e );
-                                }
-                                break;
-                            } else if ( o instanceof InputStream || o instanceof Blob ) {
-                                InputStream is;
-                                if ( o instanceof Blob ) {
-                                    try {
-                                        is = ((Blob) o).getBinaryStream();
-                                    } catch ( SQLException e ) {
-                                        throw new RuntimeException( "Could not get inputStream from Blob column", e );
-                                    }
-                                } else {
-                                    is = (InputStream) o;
-                                }
-                                File f;
-                                FileOutputStream fos = null;
-                                try ( PushbackInputStream pbis = new PushbackInputStream( is, ContentInfoUtil.DEFAULT_READ_SIZE ) ) {
-                                    byte[] buffer = new byte[ContentInfoUtil.DEFAULT_READ_SIZE];
-                                    pbis.read( buffer );
-                                    ContentInfo info = util.findMatch( buffer );
-                                    pbis.unread( buffer );
-                                    String extension = "";
-                                    if ( info != null && info.getFileExtensions() != null && info.getFileExtensions().length > 0 ) {
-                                        extension = "." + info.getFileExtensions()[0];
-                                    }
-                                    f = new File( mmFolder, columnName + "_" + UUID.randomUUID().toString() + extension );
-                                    fos = new FileOutputStream( f.getPath() );
-                                    IOUtils.copyLarge( pbis, fos );
-                                    TemporalFileManager.addFile( transaction.getXid().toString(), f );
-                                } catch ( IOException e ) {
-                                    throw new RuntimeException( "Could not place file in mm folder", e );
-                                } finally {
-                                    if ( fos != null ) {
-                                        try {
-                                            fos.close();
-                                        } catch ( IOException ignored ) {
-                                            // ignore
-                                        }
-                                    }
-                                }
-                                temp[counter] = f.getName();
-                                break;
-                            } else if ( o instanceof byte[] || o instanceof Byte[] ) {
-                                byte[] bytes;
-                                if ( o instanceof byte[] ) {
-                                    bytes = (byte[]) o;
-                                } else {
-                                    bytes = ArrayUtils.toPrimitive( (Byte[]) o );
-                                }
-                                ContentInfo info = util.findMatch( bytes );
-                                String extension = "";
-                                if ( info != null && info.getFileExtensions() != null && info.getFileExtensions().length > 0 ) {
-                                    extension = "." + info.getFileExtensions()[0];
-                                }
-                                File f = new File( mmFolder, columnName + "_" + UUID.randomUUID().toString() + extension );
-                                try ( FileOutputStream fos = new FileOutputStream( f ) ) {
-                                    fos.write( bytes );
-                                } catch ( IOException e ) {
-                                    throw new RuntimeException( "Could not place file in mm folder", e );
-                                }
-                                temp[counter] = f.getName();
-                                TemporalFileManager.addFile( transaction.getXid().toString(), f );
-                                break;
-                            }
-                            //fall through
-                        default:
-                            temp[counter] = o.toString();
-                    }
-                    if ( header.get( counter ).dataType.endsWith( "ARRAY" ) ) {
-                        if ( o instanceof Array ) {
-                            try {
-                                temp[counter] = gson.toJson( ((Array) o).getArray(), Object[].class );
-                            } catch ( SQLException sqlException ) {
-                                temp[counter] = o.toString();
-                            }
-                        } else if ( o instanceof List ) {
-                            // TODO js(knn): make sure all of this is not just a hotfix.
-                            temp[counter] = gson.toJson( o );
-                        } else {
-                            temp[counter] = o.toString();
-                        }
-                    }
-                }
-                counter++;
-            }
-            data.add( temp );
-        }
-        return data;
-    }
-
-
-    private PolyphenyDbSignature processQuery( Statement statement, String sql ) {
-        PolyphenyDbSignature signature;
-        SqlProcessor sqlProcessor = statement.getTransaction().getSqlProcessor();
-        SqlNode parsed = sqlProcessor.parse( sql );
-        RelRoot logicalRoot = null;
-        if ( parsed.isA( SqlKind.DDL ) ) {
-            signature = sqlProcessor.prepareDdl( statement, parsed );
-
-        } else {
-
-            Pair<SqlNode, RelDataType> validated = sqlProcessor.validate( statement.getTransaction(), parsed, RuntimeConfig.ADD_DEFAULT_VALUES_IN_INSERTS.getBoolean() );
-            logicalRoot = sqlProcessor.translate( statement, validated.left );
-            signature = statement.getQueryProcessor().prepareQuery( logicalRoot );
-
-        }
-        return signature;
-    }
-
-
-    private int executeSqlUpdate( final Transaction transaction, final String sqlUpdate ) throws QueryExecutionException {
-        return executeSqlUpdate( transaction.createStatement(), transaction, sqlUpdate );
-    }
-
-
-    private int executeSqlUpdate( final Statement statement, final Transaction transaction, final String sqlUpdate ) throws QueryExecutionException {
-        PolyphenyDbSignature<?> signature;
-        try {
-            signature = processQuery( statement, sqlUpdate );
-        } catch ( Throwable t ) {
-            if ( transaction.isAnalyze() ) {
-                InformationManager analyzer = transaction.getQueryAnalyzer();
-                InformationPage exceptionPage = new InformationPage( "Stacktrace" ).fullWidth();
-                InformationGroup exceptionGroup = new InformationGroup( exceptionPage.getId(), "Stacktrace" );
-                InformationStacktrace exceptionElement = new InformationStacktrace( t, exceptionGroup );
-                analyzer.addPage( exceptionPage );
-                analyzer.addGroup( exceptionGroup );
-                analyzer.registerInformation( exceptionElement );
-            }
-            if ( t instanceof AvaticaRuntimeException ) {
-                throw new QueryExecutionException( ((AvaticaRuntimeException) t).getErrorMessage(), t );
-            } else {
-                throw new QueryExecutionException( t.getMessage(), t );
-            }
-
-        }
-
-        if ( signature.statementType == StatementType.OTHER_DDL ) {
-            return 1;
-        } else if ( signature.statementType == StatementType.IS_DML ) {
-            int rowsChanged = -1;
-            try {
-                Iterator<?> iterator = signature.enumerable( statement.getDataContext() ).iterator();
-                Object object;
-                while ( iterator.hasNext() ) {
-                    object = iterator.next();
-                    int num;
-                    if ( object != null && object.getClass().isArray() ) {
-                        Object[] o = (Object[]) object;
-                        num = ((Number) o[0]).intValue();
-                    } else if ( object != null ) {
-                        num = ((Number) object).intValue();
-                    } else {
-                        throw new QueryExecutionException( "Result is null" );
-                    }
-                    // Check if num is equal for all adapters
-                    if ( rowsChanged != -1 && rowsChanged != num ) {
-                        //throw new QueryExecutionException( "The number of changed rows is not equal for all stores!" );
-                    }
-                    rowsChanged = num;
-                }
-            } catch ( RuntimeException e ) {
-                if ( e.getCause() != null ) {
-                    throw new QueryExecutionException( e.getCause().getMessage(), e );
-                } else {
-                    throw new QueryExecutionException( e.getMessage(), e );
-                }
-            }
-            return rowsChanged;
-        } else {
-            throw new QueryExecutionException( "Unknown statement type: " + signature.statementType );
-        }
-    }
-
-
-    /**
      * Get the Number of rows in a table
      */
-    private int getTableSize( Transaction transaction, final UIRequest request ) throws QueryExecutionException {
-        String[] t = request.tableId.split( "\\." );
-        String tableId = String.format( "\"%s\".\"%s\"", t[0], t[1] );
+    private long getTableSize( Transaction transaction, final UIRequest request ) {
+        String tableId = getFullEntityName( request.entityId );
         String query = "SELECT count(*) FROM " + tableId;
         if ( request.filter != null ) {
             query += " " + filterTable( request.filter );
         }
-        Result result = executeSqlSelect( transaction.createStatement(), request, query );
+
+        QueryLanguage language = QueryLanguage.from( "sql" );
+        ImplementationContext context = LanguageManager.getINSTANCE().anyPrepareQuery(
+                QueryContext.builder()
+                        .query( query )
+                        .language( language )
+                        .origin( ORIGIN )
+                        .transactionManager( transactionManager ).build(), transaction ).get( 0 );
+        List<List<PolyValue>> values = context.execute( context.getStatement() ).getIterator().getNextBatch();
         // We expect the result to be in the first column of the first row
-        if ( result.getData().length == 0 ) {
+        if ( values.isEmpty() || values.get( 0 ).isEmpty() ) {
             return 0;
         } else {
-            return Integer.parseInt( result.getData()[0][0] );
+            PolyNumber number = values.get( 0 ).get( 0 ).asNumber();
+            if ( context.getStatement().getMonitoringEvent() != null ) {
+                StatementEvent eventData = context.getStatement().getMonitoringEvent();
+                eventData.setRowCount( number.longValue() );
+            }
+            return number.longValue();
         }
     }
 
@@ -3833,13 +2650,8 @@ public class Crud implements InformationObserver {
     /**
      * Get the number of rows that should be displayed in one page in the data view
      */
-    private int getPageSize() {
+    public int getPageSize() {
         return RuntimeConfig.UI_PAGE_SIZE.getInteger();
-    }
-
-
-    private boolean isClassificationToSql() {
-        return RuntimeConfig.EXPLORE_BY_EXAMPLE_TO_SQL.getBoolean();
     }
 
 
@@ -3853,7 +2665,7 @@ public class Crud implements InformationObserver {
                 counter++;
             }
             //default
-            else if ( !entry.getValue().equals( "" ) ) {
+            else if ( !entry.getValue().isEmpty() ) {
                 joiner.add( "CAST (\"" + entry.getKey() + "\" AS VARCHAR(8000)) LIKE '" + entry.getValue() + "%'" );
                 counter++;
             }
@@ -3886,84 +2698,258 @@ public class Crud implements InformationObserver {
     }
 
 
-    private Transaction getTransaction() {
-        return getTransaction( false );
+    public Transaction getTransaction() {
+        return getTransaction( false, true, this );
     }
 
 
-    private Transaction getTransaction( boolean analyze ) {
+    public static Transaction getTransaction( boolean analyze, boolean useCache, TransactionManager transactionManager, long userId, long databaseId ) {
+        return getTransaction( analyze, useCache, transactionManager, userId, databaseId, ORIGIN );
+    }
+
+
+    public static Transaction getTransaction( boolean analyze, boolean useCache, TransactionManager transactionManager, long userId, long namespaceId, String origin ) {
+        Transaction transaction = transactionManager.startTransaction(
+                userId,
+                namespaceId,
+                analyze,
+                origin,
+                MultimediaFlavor.FILE );
+        transaction.setUseCache( useCache );
+        return transaction;
+    }
+
+
+    public static Transaction getTransaction( boolean analyze, boolean useCache, Crud crud ) {
+        return getTransaction( analyze, useCache, crud.transactionManager, Catalog.defaultUserId, Catalog.defaultNamespaceId );
+    }
+
+
+    public void getPolyAlgRegistry( Context ctx ) {
+        ctx.json( PolyAlgRegistry.serialize() );
+    }
+
+
+    /**
+     * @return a serialized version of the plan built from the given polyAlgRequest
+     * @throws NodeParseException if the parser is not able to construct the intermediary PolyAlgNode tree
+     * @throws RuntimeException if polyAlg cannot be parsed into a valid AlgNode tree
+     */
+    public void buildPlanFromPolyAlg( final Context ctx ) {
+        PolyAlgRequest request = ctx.bodyAsClass( PolyAlgRequest.class );
         try {
-            return transactionManager.startTransaction( userName, databaseName, analyze, "Polypheny-UI", MultimediaFlavor.FILE );
-        } catch ( UnknownUserException | UnknownDatabaseException | UnknownSchemaException e ) {
-            throw new RuntimeException( "Error while starting transaction", e );
+            AlgNode node = PolyPlanBuilder.buildFromPolyAlg( request.polyAlg, request.planType ).alg;
+            ctx.json( node.serializePolyAlgebra( new ObjectMapper() ) );
+        } catch ( Exception e ) {
+            //e.printStackTrace();
+            ctx.json( Map.of( "errorMsg", e.getMessage() ) );
+            ctx.status( 400 );
         }
     }
 
 
-    /**
-     * Get the data types of each column of a table
-     *
-     * @param schemaName name of the schema
-     * @param tableName name of the table
-     * @return HashMap containing the type of each column. The key is the name of the column and the value is the Sql Type (java.sql.Types).
-     */
-    private Map<String, CatalogColumn> getCatalogColumns( String schemaName, String tableName ) {
-        Map<String, CatalogColumn> dataTypes = new HashMap<>();
+    void createDockerInstance( final Context ctx ) {
         try {
-            CatalogTable table = catalog.getTable( this.databaseName, schemaName, tableName );
-            List<CatalogColumn> catalogColumns = catalog.getColumns( table.id );
-            for ( CatalogColumn catalogColumn : catalogColumns ) {
-                dataTypes.put( catalogColumn.name, catalogColumn );
-            }
-        } catch ( UnknownTableException | UnknownDatabaseException | UnknownSchemaException e ) {
-            log.error( "Caught exception", e );
+            CreateDockerRequest req = ctx.bodyAsClass( CreateDockerRequest.class );
+            Optional<HandshakeInfo> res = DockerSetupHelper.newDockerInstance(
+                    req.hostname(),
+                    req.alias(),
+                    req.registry(),
+                    req.communicationPort(),
+                    req.handshakePort(),
+                    req.proxyPort(),
+                    true
+            );
+
+            ctx.json( new CreateDockerResponse( res.orElse( null ), DockerManager.getInstance().getDockerInstancesMap() ) );
+        } catch (
+                DockerUserException e ) {
+            ctx.status( e.getStatus() ).result( e.getMessage() );
         }
-        return dataTypes;
+
+
     }
 
 
-    /**
-     * Helper function to delete a directory.
-     * Taken from https://www.baeldung.com/java-delete-directory
-     */
-    boolean deleteDirectory( final File directoryToBeDeleted ) {
-        File[] allContents = directoryToBeDeleted.listFiles();
-        if ( allContents != null ) {
-            for ( File file : allContents ) {
-                deleteDirectory( file );
-            }
+    void getDockerInstances( final Context ctx ) {
+        ctx.json( DockerManager.getInstance().getDockerInstancesMap() );
+    }
+
+
+    void getDockerInstance( final Context ctx ) {
+        try {
+            int dockerId = Integer.parseInt( ctx.pathParam( "dockerId" ) );
+
+            ctx.json( DockerManager.getInstance().getInstanceById( dockerId ).map( DockerInstance::getInfo ).orElseThrow( () -> new DockerUserException( 404, "No Docker instance with that id" ) ) );
+        } catch ( NumberFormatException e ) {
+            ctx.status( HttpCode.BAD_REQUEST ).result( "Malformed dockerId value" );
+        } catch ( DockerUserException e ) {
+            ctx.status( e.getStatus() ).result( e.getMessage() );
         }
-        return directoryToBeDeleted.delete();
+    }
+
+
+    void updateDockerInstance( final Context ctx ) {
+        UpdateDockerRequest request = ctx.bodyAsClass( UpdateDockerRequest.class );
+
+        try {
+            ctx.json( DockerSetupHelper.updateDockerInstance( request.id(), request.hostname(), request.alias(), request.registry() ) );
+        } catch ( DockerUserException e ) {
+            ctx.status( e.getStatus() ).result( e.getMessage() );
+        }
+    }
+
+
+    void reconnectToDockerInstance( final Context ctx ) {
+        try {
+            ctx.json( DockerSetupHelper.reconnectToInstance( Integer.parseInt( ctx.pathParam( "dockerId" ) ) ) );
+        } catch ( DockerUserException e ) {
+            ctx.status( e.getStatus() ).result( e.getMessage() );
+        }
+    }
+
+
+    void pingDockerInstance( final Context ctx ) {
+        try {
+            DockerManager.getInstance().getInstanceById( Integer.parseInt( ctx.pathParam( "dockerId" ) ) ).orElseThrow( () -> new DockerUserException( 404, "No instance with that id" ) ).ping();
+        } catch ( DockerUserException e ) {
+            ctx.status( e.getStatus() ).result( e.getMessage() );
+        }
+    }
+
+
+    void deleteDockerInstance( final Context ctx ) {
+        try {
+            DockerSetupHelper.removeDockerInstance( Integer.parseInt( ctx.pathParam( "dockerId" ) ) );
+
+            ctx.json( new InstancesAndAutoDocker( DockerManager.getInstance().getDockerInstancesMap(), AutoDocker.getInstance().getStatus() ) );
+        } catch ( NumberFormatException e ) {
+            ctx.status( HttpCode.BAD_REQUEST ).result( "Malformed id value" );
+        } catch ( DockerUserException e ) {
+            ctx.status( e.getStatus() ).result( e.getMessage() );
+        }
+    }
+
+
+    void getAutoDockerStatus( final Context ctx ) {
+        ctx.json( AutoDocker.getInstance().getStatus() );
+    }
+
+
+    void doAutoHandshake( final Context ctx ) {
+        try {
+            AutoDocker.getInstance().doAutoConnect();
+            ctx.json(
+                    new AutoDockerResult(
+                            AutoDocker.getInstance().getStatus(),
+                            DockerManager.getInstance().getDockerInstancesMap()
+                    )
+            );
+        } catch ( DockerUserException e ) {
+            ctx.status( e.getStatus() ).result( e.getMessage() );
+        }
+    }
+
+
+    void getHandshakes( final Context ctx ) {
+        ctx.json( HandshakeManager.getInstance().getActiveHandshakes() );
+    }
+
+
+    void getHandshake( final Context ctx ) {
+        long id = Long.parseLong( ctx.pathParam( "id" ) );
+        Optional<HandshakeInfo> maybeHandshake = HandshakeManager.getInstance().getHandshake( id );
+        if ( maybeHandshake.isPresent() ) {
+            ctx.json( maybeHandshake.get() );
+        } else {
+            ctx.status( 404 ).result( "No handshake with that id" );
+        }
+    }
+
+
+    void restartHandshake( final Context ctx ) {
+        try {
+            ctx.json( HandshakeManager.getInstance().restartHandshake( Long.parseLong( ctx.pathParam( "id" ) ) ) );
+        } catch ( DockerUserException e ) {
+            ctx.status( e.getStatus() ).result( e.getMessage() );
+        }
+    }
+
+
+    void cancelHandshake( final Context ctx ) {
+        long id = Long.parseLong( ctx.pathParam( "id" ) );
+        if ( HandshakeManager.getInstance().cancelAndRemoveHandshake( id ) ) {
+            ctx.status( 200 );
+        } else {
+            ctx.status( 404 );
+        }
+    }
+
+
+    void deleteHandshake( final Context ctx ) {
+        long id = Long.parseLong( ctx.pathParam( "id" ) );
+        if ( HandshakeManager.getInstance().cancelAndRemoveHandshake( id ) ) {
+            ctx.status( 200 ).json( HandshakeManager.getInstance().getActiveHandshakes() );
+        } else {
+            ctx.status( 404 );
+        }
+    }
+
+
+    void getDockerSettings( final Context ctx ) {
+        ctx.json(
+                new DockerSettings( RuntimeConfig.DOCKER_CONTAINER_REGISTRY.getString() )
+        );
+    }
+
+
+    void updateDockerSettings( final Context ctx ) {
+        DockerSettings settings = ctx.bodyAsClass( DockerSettings.class );
+        if ( settings.defaultRegistry() != null ) {
+            RuntimeConfig.DOCKER_CONTAINER_REGISTRY.setString( settings.defaultRegistry() );
+        }
+        getDockerSettings( ctx );
     }
 
 
     /**
-     * This method can be used to retrieve the status of a specific Docker instance and if
-     * it is running correctly when using the provided settings
-     *
-     * @return if the Docker instance is correctly configured and can be accessed by Polypheny
+     * Loads the plugin in the supplied path.
      */
-    public boolean testDockerInstance( Request req, Response res ) {
-        String dockerId = req.params( "dockerId" );
-        return DockerManager.getInstance().testDockerRunning( Integer.parseInt( dockerId ) );
+    public void loadPlugins( final Context ctx ) {
+        ctx.uploadedFiles( "plugins" ).forEach( file -> {
+            String[] splits = file.getFilename().split( "/" );
+            String normalizedFileName = splits[splits.length - 1];
+            splits = normalizedFileName.split( "\\\\" );
+            normalizedFileName = splits[splits.length - 1];
+            File f = new File( System.getProperty( "user.home" ), ".polypheny/plugins/" + normalizedFileName );
+            try {
+                FileUtils.copyInputStreamToFile( file.getContent(), f );
+            } catch ( IOException e ) {
+                throw new GenericRuntimeException( e );
+            }
+            PolyPluginManager.loadAdditionalPlugin( f );
+        } );
+
     }
 
 
     /**
-     * Retrieve a collection which maps the dockerInstance ids to the corresponding used ports
+     * Unload the plugin with the supplied pluginId.
      */
-    public Map<Integer, List<Integer>> getUsedDockerPorts( Request req, Response res ) {
-        return DockerManager.getInstance().getUsedPortsSorted();
+    public void unloadPlugin( final Context ctx ) {
+        String pluginId = ctx.bodyAsClass( String.class );
+
+        ctx.json( PolyPluginManager.unloadAdditionalPlugin( pluginId ) );
     }
 
 
     /**
      * Helper method to zip a directory
-     * from https://stackoverflow.com/questions/2403830
      */
     private static void zipDirectory( String basePath, File dir, ZipOutputStream zipOut ) throws IOException {
         byte[] buffer = new byte[4096];
         File[] files = dir.listFiles();
+        assert files != null;
         for ( File file : files ) {
             if ( file.isDirectory() ) {
                 String path = basePath + file.getName() + "/";
@@ -3984,22 +2970,20 @@ public class Crud implements InformationObserver {
     }
 
 
-    static class QueryExecutionException extends Exception {
-
-        QueryExecutionException( String message ) {
-            super( message );
-        }
-
-
-        QueryExecutionException( String message, Throwable t ) {
-            super( message, t );
-        }
-
-
-        QueryExecutionException( Throwable t ) {
-            super( t );
-        }
-
+    public void getAvailablePlugins( Context ctx ) {
+        ctx.json( PolyPluginManager
+                .getPLUGINS()
+                .values()
+                .stream()
+                .map( PluginStatus::from )
+                .toList() );
     }
+
+
+    @Override
+    public void propertyChange( PropertyChangeEvent evt ) {
+        authCrud.broadcast( SnapshotModel.from( Catalog.snapshot() ) );
+    }
+
 
 }

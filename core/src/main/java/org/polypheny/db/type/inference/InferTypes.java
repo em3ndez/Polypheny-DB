@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,11 +18,10 @@ package org.polypheny.db.type.inference;
 
 
 import com.google.common.collect.ImmutableList;
-import java.io.Serializable;
 import java.util.List;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.rel.type.RelDataTypeFactory;
-import org.polypheny.db.sql.SqlNode;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.algebra.type.AlgDataTypeFactory;
+import org.polypheny.db.nodes.Node;
 import org.polypheny.db.type.PolyType;
 
 
@@ -32,7 +31,7 @@ import org.polypheny.db.type.PolyType;
  * @see PolyOperandTypeInference
  * @see ReturnTypes
  */
-public abstract class InferTypes implements Serializable {
+public abstract class InferTypes {
 
     private InferTypes() {
     }
@@ -42,10 +41,10 @@ public abstract class InferTypes implements Serializable {
      * Operand type-inference strategy where an unknown operand type is derived from the first operand with a known type.
      */
     public static final PolyOperandTypeInference FIRST_KNOWN =
-            (PolyOperandTypeInference & Serializable) ( callBinding, returnType, operandTypes ) -> {
-                final RelDataType unknownType = callBinding.getValidator().getUnknownType();
-                RelDataType knownType = unknownType;
-                for ( SqlNode operand : callBinding.operands() ) {
+            ( callBinding, returnType, operandTypes ) -> {
+                final AlgDataType unknownType = callBinding.getValidator().getUnknownType();
+                AlgDataType knownType = unknownType;
+                for ( Node operand : callBinding.operands() ) {
                     knownType = callBinding.getValidator().deriveType( callBinding.getScope(), operand );
                     if ( !knownType.equals( unknownType ) ) {
                         break;
@@ -65,11 +64,11 @@ public abstract class InferTypes implements Serializable {
      * type is a record, it must have the same number of fields as the number of operands.
      */
     public static final PolyOperandTypeInference RETURN_TYPE =
-            (PolyOperandTypeInference & Serializable) ( callBinding, returnType, operandTypes ) -> {
+            ( callBinding, returnType, operandTypes ) -> {
                 for ( int i = 0; i < operandTypes.length; ++i ) {
                     operandTypes[i] =
                             returnType.isStruct()
-                                    ? returnType.getFieldList().get( i ).getType()
+                                    ? returnType.getFields().get( i ).getType()
                                     : returnType;
                 }
             };
@@ -78,8 +77,8 @@ public abstract class InferTypes implements Serializable {
      * Operand type-inference strategy where an unknown operand type is assumed to be boolean.
      */
     public static final PolyOperandTypeInference BOOLEAN =
-            (PolyOperandTypeInference & Serializable) ( callBinding, returnType, operandTypes ) -> {
-                RelDataTypeFactory typeFactory = callBinding.getTypeFactory();
+            ( callBinding, returnType, operandTypes ) -> {
+                AlgDataTypeFactory typeFactory = callBinding.getTypeFactory();
                 for ( int i = 0; i < operandTypes.length; ++i ) {
                     operandTypes[i] = typeFactory.createPolyType( PolyType.BOOLEAN );
                 }
@@ -91,8 +90,8 @@ public abstract class InferTypes implements Serializable {
      * really care about the type at all, so it's reasonable to use something that every other type can be cast to.
      */
     public static final PolyOperandTypeInference VARCHAR_1024 =
-            (PolyOperandTypeInference & Serializable) ( callBinding, returnType, operandTypes ) -> {
-                RelDataTypeFactory typeFactory = callBinding.getTypeFactory();
+            ( callBinding, returnType, operandTypes ) -> {
+                AlgDataTypeFactory typeFactory = callBinding.getTypeFactory();
                 for ( int i = 0; i < operandTypes.length; ++i ) {
                     operandTypes[i] = typeFactory.createPolyType( PolyType.VARCHAR, 1024 );
                 }
@@ -100,9 +99,21 @@ public abstract class InferTypes implements Serializable {
 
 
     /**
+     * Operand type-inference strategy where an unknown operand type is assumed to be GEOMETRY.
+     */
+    public static final PolyOperandTypeInference GEOMETRY =
+            ( callBinding, returnType, operandTypes ) -> {
+                AlgDataTypeFactory typeFactory = callBinding.getTypeFactory();
+                for ( int i = 0; i < operandTypes.length; ++i ) {
+                    operandTypes[i] = typeFactory.createPolyType( PolyType.GEOMETRY );
+                }
+            };
+
+
+    /**
      * Returns an {@link PolyOperandTypeInference} that returns a given list of types.
      */
-    public static PolyOperandTypeInference explicit( List<RelDataType> types ) {
+    public static PolyOperandTypeInference explicit( List<AlgDataType> types ) {
         return new ExplicitOperandTypeInference( ImmutableList.copyOf( types ) );
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,8 @@ package org.polypheny.db.tools;
 
 import com.google.common.collect.ImmutableList;
 import java.util.Iterator;
-import org.polypheny.db.plan.RelOptRule;
+import org.jetbrains.annotations.NotNull;
+import org.polypheny.db.plan.AlgOptRule;
 
 
 /**
@@ -53,7 +54,7 @@ public class RuleSets {
     /**
      * Creates a rule set with a given array of rules.
      */
-    public static RuleSet ofList( RelOptRule... rules ) {
+    public static RuleSet ofList( AlgOptRule... rules ) {
         return new ListRuleSet( ImmutableList.copyOf( rules ) );
     }
 
@@ -61,7 +62,7 @@ public class RuleSets {
     /**
      * Creates a rule set with a given collection of rules.
      */
-    public static RuleSet ofList( Iterable<? extends RelOptRule> rules ) {
+    public static RuleSet ofList( Iterable<? extends AlgOptRule> rules ) {
         return new ListRuleSet( ImmutableList.copyOf( rules ) );
     }
 
@@ -69,20 +70,7 @@ public class RuleSets {
     /**
      * Rule set that consists of a list of rules.
      */
-    private static class ListRuleSet implements RuleSet {
-
-        private final ImmutableList<RelOptRule> rules;
-
-
-        ListRuleSet( ImmutableList<RelOptRule> rules ) {
-            this.rules = rules;
-        }
-
-
-        @Override
-        public int hashCode() {
-            return rules.hashCode();
-        }
+    private record ListRuleSet( ImmutableList<AlgOptRule> rules ) implements RuleSet {
 
 
         @Override
@@ -94,9 +82,10 @@ public class RuleSets {
 
 
         @Override
-        public Iterator<RelOptRule> iterator() {
+        public @NotNull Iterator<AlgOptRule> iterator() {
             return rules.iterator();
         }
-    }
-}
 
+    }
+
+}

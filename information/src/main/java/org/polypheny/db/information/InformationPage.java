@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2025 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,21 +17,22 @@
 package org.polypheny.db.information;
 
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.experimental.Accessors;
-import org.polypheny.db.information.InformationDuration.Duration;
+import lombok.extern.slf4j.Slf4j;
 import org.polypheny.db.information.exception.InformationRuntimeException;
 
 
 /**
  * An InformationPage contains multiple InformationGroups that will be rendered together in a subpage in the UI.
  */
+@Slf4j
 @Accessors(chain = true)
 public class InformationPage extends Refreshable {
 
@@ -39,24 +40,28 @@ public class InformationPage extends Refreshable {
     /**
      * Id of this page
      */
+    @JsonProperty
     @Getter
     private final String id;
 
     /**
      * Name of this page
      */
+    @JsonProperty
     @Getter
     private String name; // title
 
     /**
      * Description for this page
      */
+    @JsonProperty
     @Getter
     private String description;
 
     /**
      * You can set an icon that will be displayed before the label of this page (in the sidebar).
      */
+    @JsonProperty
     @Getter
     @Setter
     private String icon;
@@ -65,6 +70,7 @@ public class InformationPage extends Refreshable {
      * Is true, if the page was created implicit. If it will be created explicit, additional information (title/description/icon) will be added.
      */
     @Getter
+    @JsonProperty
     private boolean implicit = false;
 
     /**
@@ -72,18 +78,20 @@ public class InformationPage extends Refreshable {
      */
     @Getter
     @Setter
+    @JsonProperty
     private String label;
 
     /**
      * All items on this page will be rendered in full width
      */
-    @SuppressWarnings({ "FieldCanBeLocal", "unused" })
+    @JsonProperty
     private boolean fullWidth = false;
 
     /**
      * Groups that belong to this page.
      */
-    private final ConcurrentMap<String, InformationGroup> groups = new ConcurrentHashMap<>();
+    @JsonProperty
+    private final Map<String, InformationGroup> groups = new ConcurrentHashMap<>();
 
 
     /**
@@ -92,29 +100,26 @@ public class InformationPage extends Refreshable {
      * @param title Title of this page
      */
     public InformationPage( final String title ) {
-        this.id = UUID.randomUUID().toString();
-        this.name = title;
+        this( UUID.randomUUID().toString(), title, null );
     }
 
 
     /**
      * Constructor
      *
-     * @param title       Title of this page
+     * @param title Title of this page
      * @param description Description of this page, will be displayed in the UI
      */
     public InformationPage( final String title, final String description ) {
-        this.id = UUID.randomUUID().toString();
-        this.name = title;
-        this.description = description;
+        this( UUID.randomUUID().toString(), title, description );
     }
 
 
     /**
      * Constructor
      *
-     * @param id          Id of this page
-     * @param title       Title of this page
+     * @param id Id of this page
+     * @param title Title of this page
      * @param description Description of this page, will be displayed in the UI
      */
     public InformationPage( final String id, final String title, final String description ) {
@@ -130,6 +135,13 @@ public class InformationPage extends Refreshable {
     public void addGroup( final InformationGroup... groups ) {
         for ( InformationGroup g : groups ) {
             this.groups.put( g.getId(), g );
+        }
+    }
+
+
+    public void removeGroup( final InformationGroup... groups ) {
+        for ( InformationGroup g : groups ) {
+            this.groups.remove( g.getId(), g );
         }
     }
 
@@ -160,17 +172,24 @@ public class InformationPage extends Refreshable {
     }
 
 
+    public InformationPage setStmtLabel( long stmtIdx ) {
+        this.label = "Query " + (stmtIdx + 1);
+        return this;
+    }
+
+
     /**
-     * Page is converted to a JSON using gson
+     * Convert page to Json using the custom TypeAdapter
      *
      * @return this page as JSON
      */
     public String asJson() {
-        Gson gson = new GsonBuilder()
-                .registerTypeAdapter( InformationDuration.class, InformationDuration.getSerializer() )
-                .registerTypeAdapter( Duration.class, Duration.getSerializer() )
-                .disableHtmlEscaping()
-                .create();
-        return gson.toJson( this );
+        try {
+            return Information.mapper.writeValueAsString( this );
+        } catch ( JsonProcessingException e ) {
+            log.warn( "Error on serialization of informationPage" );
+            return null;
+        }
     }
+
 }

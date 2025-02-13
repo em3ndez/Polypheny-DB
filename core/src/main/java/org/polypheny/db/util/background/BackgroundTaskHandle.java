@@ -1,3 +1,19 @@
+/*
+ * Copyright 2019-2024 The Polypheny Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.polypheny.db.util.background;
 
 
@@ -9,7 +25,9 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang.time.StopWatch;
+import org.apache.commons.lang3.time.StopWatch;
+import org.polypheny.db.catalog.exceptions.GenericRuntimeException;
+import org.polypheny.db.util.background.BackgroundTask.TaskDelayType;
 import org.polypheny.db.util.background.BackgroundTask.TaskPriority;
 import org.polypheny.db.util.background.BackgroundTask.TaskSchedulingType;
 
@@ -32,7 +50,7 @@ class BackgroundTaskHandle implements Runnable {
     @Getter
     private long maxExecTime = 0L;
 
-    private ScheduledFuture runner;
+    private final ScheduledFuture<?> runner;
 
 
     public BackgroundTaskHandle( String id, BackgroundTask task, String description, TaskPriority priority, TaskSchedulingType schedulingType ) {
@@ -44,11 +62,14 @@ class BackgroundTaskHandle implements Runnable {
 
         // Schedule
         ScheduledExecutorService exec = Executors.newSingleThreadScheduledExecutor();
-        if ( schedulingType == TaskSchedulingType.WORKLOAD ) {
-            this.runner = exec.scheduleWithFixedDelay( this, 0, 100, TimeUnit.MILLISECONDS ); // TODO MV: implement workload based scheduling
-        } else {
+        if ( schedulingType.getDelayType() == TaskDelayType.FIXED ) {
             this.runner = exec.scheduleAtFixedRate( this, 0, schedulingType.getMillis(), TimeUnit.MILLISECONDS );
+        } else if ( schedulingType.getDelayType() == TaskDelayType.DELAYED ) {
+            this.runner = exec.scheduleWithFixedDelay( this, 0, schedulingType.getMillis(), TimeUnit.MILLISECONDS );
+        } else {
+            throw new GenericRuntimeException( "Unknown TaskDelayType: " + schedulingType.getDelayType().name() );
         }
+
     }
 
 
@@ -76,6 +97,7 @@ class BackgroundTaskHandle implements Runnable {
                 maxExecTime = stopWatch.getTime();
             }
         } catch ( Exception e ) {
+
             log.error( "Caught exception in background task", e );
         }
     }
@@ -110,6 +132,7 @@ class BackgroundTaskHandle implements Runnable {
             }
             return sum / (double) window.size();
         }
+
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,39 +36,43 @@ package org.polypheny.db.type;
 
 import java.nio.charset.Charset;
 import java.util.List;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.rel.type.RelDataTypeFactory;
-import org.polypheny.db.rel.type.RelDataTypeFactoryImpl;
-import org.polypheny.db.rel.type.RelDataTypeFamily;
-import org.polypheny.db.rel.type.RelDataTypeSystem;
-import org.polypheny.db.sql.SqlCollation;
-import org.polypheny.db.sql.SqlIntervalQualifier;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.algebra.type.AlgDataTypeFactory;
+import org.polypheny.db.algebra.type.AlgDataTypeFactoryImpl;
+import org.polypheny.db.algebra.type.AlgDataTypeFamily;
+import org.polypheny.db.algebra.type.AlgDataTypeField;
+import org.polypheny.db.algebra.type.AlgDataTypeSystem;
+import org.polypheny.db.nodes.IntervalQualifier;
+import org.polypheny.db.util.Collation;
 import org.polypheny.db.util.Util;
 
 
 /**
- * SqlTypeFactoryImpl provides a default implementation of {@link RelDataTypeFactory} which supports SQL types.
+ * SqlTypeFactoryImpl provides a default implementation of {@link AlgDataTypeFactory} which supports SQL types.
  */
-public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
+public class PolyTypeFactoryImpl extends AlgDataTypeFactoryImpl {
 
-    public PolyTypeFactoryImpl( RelDataTypeSystem typeSystem ) {
+    public PolyTypeFactoryImpl( AlgDataTypeSystem typeSystem ) {
         super( typeSystem );
     }
 
 
     @Override
-    public RelDataType createPolyType( PolyType typeName ) {
+    public AlgDataType createPolyType( PolyType typeName ) {
         if ( typeName.allowsPrec() ) {
             return createPolyType( typeName, typeSystem.getDefaultPrecision( typeName ) );
         }
+        if ( typeName == PolyType.ARRAY ) {
+            return new ArrayType( new BasicPolyType( AlgDataTypeSystem.DEFAULT, PolyType.ANY ), true );
+        }
         assertBasic( typeName );
-        RelDataType newType = new BasicPolyType( typeSystem, typeName );
+        AlgDataType newType = new BasicPolyType( typeSystem, typeName );
         return canonize( newType );
     }
 
 
     @Override
-    public RelDataType createPolyType( PolyType typeName, int precision ) {
+    public AlgDataType createPolyType( PolyType typeName, int precision ) {
         final int maxPrecision = typeSystem.getMaxPrecision( typeName );
         if ( maxPrecision >= 0 && precision > maxPrecision ) {
             precision = maxPrecision;
@@ -77,80 +81,84 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
             return createPolyType( typeName, precision, typeName.getDefaultScale() );
         }
         assertBasic( typeName );
-        assert (precision >= 0) || (precision == RelDataType.PRECISION_NOT_SPECIFIED);
-        RelDataType newType = new BasicPolyType( typeSystem, typeName, precision );
+        assert (precision >= 0) || (precision == AlgDataType.PRECISION_NOT_SPECIFIED);
+        AlgDataType newType = new BasicPolyType( typeSystem, typeName, precision );
         newType = PolyTypeUtil.addCharsetAndCollation( newType, this );
         return canonize( newType );
     }
 
 
     @Override
-    public RelDataType createPolyType( PolyType typeName, int precision, int scale ) {
+    public AlgDataType createPolyType( PolyType typeName, int precision, int scale ) {
         assertBasic( typeName );
-        assert (precision >= 0) || (precision == RelDataType.PRECISION_NOT_SPECIFIED);
+        assert (precision >= 0) || (precision == AlgDataType.PRECISION_NOT_SPECIFIED);
         final int maxPrecision = typeSystem.getMaxPrecision( typeName );
         if ( maxPrecision >= 0 && precision > maxPrecision ) {
             precision = maxPrecision;
         }
-        RelDataType newType = new BasicPolyType( typeSystem, typeName, precision, scale );
+        AlgDataType newType = new BasicPolyType( typeSystem, typeName, precision, scale );
         newType = PolyTypeUtil.addCharsetAndCollation( newType, this );
         return canonize( newType );
     }
 
 
     @Override
-    public RelDataType createUnknownType() {
+    public AlgDataType createUnknownType() {
         return canonize( new UnknownPolyType( this ) );
     }
 
 
     @Override
-    public RelDataType createMultisetType( RelDataType type, long maxCardinality ) {
+    public AlgDataType createMultisetType( AlgDataType type, long maxCardinality ) {
         assert maxCardinality == -1;
-        RelDataType newType = new MultisetPolyType( type, false );
+        AlgDataType newType = new MultisetPolyType( type, false );
         return canonize( newType );
     }
 
 
     @Override
-    public RelDataType createArrayType( RelDataType elementType, long maxCardinality ) {
+    public AlgDataType createArrayType( AlgDataType elementType, long maxCardinality ) {
         ArrayType newType = new ArrayType( elementType, false, maxCardinality, -1 );
         return canonize( newType );
     }
 
 
     @Override
-    public RelDataType createArrayType( RelDataType elementType, long maxCardinality, long dimension ) {
+    public AlgDataType createArrayType( AlgDataType elementType, long maxCardinality, long dimension ) {
         ArrayType newType = new ArrayType( elementType, false, maxCardinality, dimension );
         return canonize( newType );
     }
 
 
     @Override
-    public RelDataType createMapType( RelDataType keyType, RelDataType valueType ) {
+    public AlgDataType createMapType( AlgDataType keyType, AlgDataType valueType ) {
         MapPolyType newType = new MapPolyType( keyType, valueType, false );
         return canonize( newType );
     }
 
 
     @Override
-    public RelDataType createSqlIntervalType( SqlIntervalQualifier intervalQualifier ) {
-        RelDataType newType = new IntervalPolyType( typeSystem, intervalQualifier, false );
+    public AlgDataType createIntervalType( IntervalQualifier intervalQualifier ) {
+        AlgDataType newType = new IntervalPolyType( typeSystem, intervalQualifier, false );
         return canonize( newType );
     }
 
 
     @Override
-    public RelDataType createTypeWithCharsetAndCollation( RelDataType type, Charset charset, SqlCollation collation ) {
+    public AlgDataType createPathType( List<AlgDataTypeField> pathType ) {
+        return new PathType( false, pathType );
+    }
+
+
+    @Override
+    public AlgDataType createTypeWithCharsetAndCollation( AlgDataType type, Charset charset, Collation collation ) {
         assert PolyTypeUtil.inCharFamily( type ) : type;
         assert charset != null;
         assert collation != null;
-        RelDataType newType;
-        if ( type instanceof BasicPolyType ) {
-            BasicPolyType sqlType = (BasicPolyType) type;
+        AlgDataType newType;
+        if ( type instanceof BasicPolyType sqlType ) {
             newType = sqlType.createWithCharsetAndCollation( charset, collation );
-        } else if ( type instanceof JavaType ) {
-            JavaType javaType = (JavaType) type;
+        } else if ( type instanceof JavaType javaType ) {
             newType = new JavaType( javaType.getJavaClass(), javaType.isNullable(), charset, collation );
         } else {
             throw Util.needToImplement( "need to implement " + type );
@@ -160,13 +168,13 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
 
 
     @Override
-    public RelDataType leastRestrictive( List<RelDataType> types ) {
+    public AlgDataType leastRestrictive( List<AlgDataType> types ) {
         assert types != null;
-        assert types.size() >= 1;
+        assert !types.isEmpty();
 
-        RelDataType type0 = types.get( 0 );
+        AlgDataType type0 = types.get( 0 );
         if ( type0.getPolyType() != null ) {
-            RelDataType resultType = leastRestrictiveSqlType( types );
+            AlgDataType resultType = leastRestrictiveSqlType( types );
             if ( resultType != null ) {
                 return resultType;
             }
@@ -177,11 +185,11 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
     }
 
 
-    private RelDataType leastRestrictiveByCast( List<RelDataType> types ) {
-        RelDataType resultType = types.get( 0 );
+    private AlgDataType leastRestrictiveByCast( List<AlgDataType> types ) {
+        AlgDataType resultType = types.get( 0 );
         boolean anyNullable = resultType.isNullable();
         for ( int i = 1; i < types.size(); i++ ) {
-            RelDataType type = types.get( i );
+            AlgDataType type = types.get( i );
             if ( type.getPolyType() == PolyType.NULL ) {
                 anyNullable = true;
                 continue;
@@ -208,20 +216,20 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
 
 
     @Override
-    public RelDataType createTypeWithNullability( final RelDataType type, final boolean nullable ) {
-        final RelDataType newType;
-        if ( type instanceof BasicPolyType ) {
-            newType = ((BasicPolyType) type).createWithNullability( nullable );
-        } else if ( type instanceof MapPolyType ) {
-            newType = copyMapType( type, nullable );
-        } else if ( type instanceof ArrayType ) {
-            newType = copyArrayType( type, nullable );
-        } else if ( type instanceof MultisetPolyType ) {
-            newType = copyMultisetType( type, nullable );
-        } else if ( type instanceof IntervalPolyType ) {
-            newType = copyIntervalType( type, nullable );
-        } else if ( type instanceof ObjectPolyType ) {
-            newType = copyObjectType( type, nullable );
+    public AlgDataType createTypeWithNullability( final AlgDataType type, final boolean nullable ) {
+        final AlgDataType newType;
+        if ( type instanceof BasicPolyType basicPolyType) {
+            newType = basicPolyType.createWithNullability( nullable );
+        } else if ( type instanceof MapPolyType mapPolyType ) {
+            newType = copyMapType( mapPolyType, nullable );
+        } else if ( type instanceof ArrayType arrayType ) {
+            newType = copyArrayType( arrayType, nullable );
+        } else if ( type instanceof MultisetPolyType multisetPolyType ) {
+            newType = copyMultisetType( multisetPolyType, nullable );
+        } else if ( type instanceof IntervalPolyType intervalPolyType ) {
+            newType = copyIntervalType( intervalPolyType, nullable );
+        } else if ( type instanceof ObjectPolyType objectPolyType ) {
+            newType = copyObjectType( objectPolyType, nullable );
         } else {
             return super.createTypeWithNullability( type, nullable );
         }
@@ -237,14 +245,14 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
     }
 
 
-    private RelDataType leastRestrictiveSqlType( List<RelDataType> types ) {
-        RelDataType resultType = null;
+    private AlgDataType leastRestrictiveSqlType( List<AlgDataType> types ) {
+        AlgDataType resultType = null;
         int nullCount = 0;
         int nullableCount = 0;
         int javaCount = 0;
         int anyCount = 0;
 
-        for ( RelDataType type : types ) {
+        for ( AlgDataType type : types ) {
             final PolyType typeName = type.getPolyType();
             if ( typeName == null ) {
                 return null;
@@ -271,8 +279,8 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
         }
 
         for ( int i = 0; i < types.size(); ++i ) {
-            RelDataType type = types.get( i );
-            RelDataTypeFamily family = type.getFamily();
+            AlgDataType type = types.get( i );
+            AlgDataTypeFamily family = type.getFamily();
 
             final PolyType typeName = type.getPolyType();
             if ( typeName == PolyType.NULL ) {
@@ -282,7 +290,7 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
             // Convert Java types; for instance, JavaType(int) becomes INTEGER.
             // Except if all types are either NULL or Java types.
             if ( isJavaType( type ) && javaCount + nullCount < types.size() ) {
-                final RelDataType originalType = type;
+                final AlgDataType originalType = type;
                 type = typeName.allowsPrecScale( true, true )
                         ? createPolyType( typeName, type.getPrecision(), type.getScale() )
                         : typeName.allowsPrecScale( true, false )
@@ -298,7 +306,7 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
                 }
             }
 
-            RelDataTypeFamily resultFamily = resultType.getFamily();
+            AlgDataTypeFamily resultFamily = resultType.getFamily();
             PolyType resultTypeName = resultType.getPolyType();
 
             if ( resultFamily != family ) {
@@ -307,8 +315,8 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
             if ( PolyTypeUtil.inCharOrBinaryFamilies( type ) ) {
                 Charset charset1 = type.getCharset();
                 Charset charset2 = resultType.getCharset();
-                SqlCollation collation1 = type.getCollation();
-                SqlCollation collation2 = resultType.getCollation();
+                Collation collation1 = type.getCollation();
+                Collation collation2 = resultType.getCollation();
 
                 // TODO:  refine collation combination rules
                 final int precision = PolyTypeUtil.maxPrecision( resultType.getPrecision(), type.getPrecision() );
@@ -336,10 +344,13 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
                         }
                     }
 
-                    resultType = createPolyType( newTypeName, precision );
+                    if ( newTypeName != PolyType.TEXT ) {
+                        resultType = createPolyType( newTypeName, precision );
+                    }
+
                 }
                 Charset charset = null;
-                SqlCollation collation = null;
+                Collation collation = null;
                 if ( (charset1 != null) || (charset2 != null) ) {
                     if ( charset1 == null ) {
                         charset = charset2;
@@ -365,7 +376,7 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
                 if ( PolyTypeUtil.isExactNumeric( resultType ) ) {
                     // TODO: come up with a cleaner way to support interval + datetime = datetime
                     if ( types.size() > (i + 1) ) {
-                        RelDataType type1 = types.get( i + 1 );
+                        AlgDataType type1 = types.get( i + 1 );
                         if ( PolyTypeUtil.isDatetime( type1 ) ) {
                             resultType = type1;
                             return createTypeWithNullability( resultType, nullCount > 0 || nullableCount > 0 );
@@ -432,7 +443,7 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
             } else if ( PolyTypeUtil.isInterval( type ) ) {
                 // TODO: come up with a cleaner way to support interval + datetime = datetime
                 if ( types.size() > (i + 1) ) {
-                    RelDataType type1 = types.get( i + 1 );
+                    AlgDataType type1 = types.get( i + 1 );
                     if ( PolyTypeUtil.isDatetime( type1 ) ) {
                         resultType = type1;
                         return createTypeWithNullability( resultType, nullCount > 0 || nullableCount > 0 );
@@ -448,7 +459,7 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
             } else if ( PolyTypeUtil.isDatetime( type ) ) {
                 // TODO: come up with a cleaner way to support datetime +/- interval (or integer) = datetime
                 if ( types.size() > (i + 1) ) {
-                    RelDataType type1 = types.get( i + 1 );
+                    AlgDataType type1 = types.get( i + 1 );
                     if ( PolyTypeUtil.isInterval( type1 ) || PolyTypeUtil.isIntType( type1 ) ) {
                         resultType = type;
                         return createTypeWithNullability( resultType, nullCount > 0 || nullableCount > 0 );
@@ -466,66 +477,61 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
     }
 
 
-    private RelDataType createDoublePrecisionType() {
+    private AlgDataType createDoublePrecisionType() {
         return createPolyType( PolyType.DOUBLE );
     }
 
 
-    private RelDataType copyMultisetType( RelDataType type, boolean nullable ) {
-        MultisetPolyType mt = (MultisetPolyType) type;
-        RelDataType elementType = copyType( mt.getComponentType() );
+    private AlgDataType copyMultisetType( MultisetPolyType mt, boolean nullable ) {
+        AlgDataType elementType = copyType( mt.getComponentType() );
         return new MultisetPolyType( elementType, nullable );
     }
 
 
-    private RelDataType copyIntervalType( RelDataType type, boolean nullable ) {
+    private AlgDataType copyIntervalType( IntervalPolyType type, boolean nullable ) {
         return new IntervalPolyType( typeSystem, type.getIntervalQualifier(), nullable );
     }
 
 
-    private RelDataType copyObjectType( RelDataType type, boolean nullable ) {
+    private AlgDataType copyObjectType( ObjectPolyType type, boolean nullable ) {
         return new ObjectPolyType(
                 type.getPolyType(),
-                type.getSqlIdentifier(),
                 nullable,
-                type.getFieldList(),
+                type.getFields(),
                 type.getComparability() );
     }
 
 
-    private RelDataType copyArrayType( RelDataType type, boolean nullable ) {
-        ArrayType at = (ArrayType) type;
-        RelDataType elementType = copyType( at.getComponentType() );
+    private AlgDataType copyArrayType( ArrayType at, boolean nullable ) {
+        AlgDataType elementType = copyType( at.getComponentType() );
         return new ArrayType( elementType, nullable, at.getCardinality(), at.getDimension() );
     }
 
 
-    private RelDataType copyMapType( RelDataType type, boolean nullable ) {
-        MapPolyType mt = (MapPolyType) type;
-        RelDataType keyType = copyType( mt.getKeyType() );
-        RelDataType valueType = copyType( mt.getValueType() );
+    private AlgDataType copyMapType( MapPolyType mt, boolean nullable ) {
+        AlgDataType keyType = copyType( mt.getKeyType() );
+        AlgDataType valueType = copyType( mt.getValueType() );
         return new MapPolyType( keyType, valueType, nullable );
     }
 
 
     // override RelDataTypeFactoryImpl
     @Override
-    protected RelDataType canonize( RelDataType type ) {
+    protected AlgDataType canonize( AlgDataType type ) {
         // skip canonize step for ArrayTypes, to not cache cardinality or dimension
         //type = super.canonize( type );
-        if( ! (type instanceof ArrayType)) {
+        if ( !(type instanceof ArrayType) ) {
             type = super.canonize( type );
-        } else if ( ((ArrayType)type).getCardinality() == -1 && ((ArrayType)type).getDimension() == -1 ) {
+        } else if ( ((ArrayType) type).getCardinality() == -1 && ((ArrayType) type).getDimension() == -1 ) {
             type = super.canonize( type );
         }
-        if ( !(type instanceof ObjectPolyType) ) {
+        if ( !(type instanceof ObjectPolyType objectType) ) {
             return type;
         }
-        ObjectPolyType objectType = (ObjectPolyType) type;
         if ( !objectType.isNullable() ) {
             objectType.setFamily( objectType );
         } else {
-            objectType.setFamily( (RelDataTypeFamily) createTypeWithNullability( objectType, false ) );
+            objectType.setFamily( (AlgDataTypeFamily) createTypeWithNullability( objectType, false ) );
         }
         return type;
     }
@@ -536,7 +542,7 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
      */
     private static class UnknownPolyType extends BasicPolyType {
 
-        UnknownPolyType( RelDataTypeFactory typeFactory ) {
+        UnknownPolyType( AlgDataTypeFactory typeFactory ) {
             super( typeFactory.getTypeSystem(), PolyType.NULL );
         }
 
@@ -545,6 +551,8 @@ public class PolyTypeFactoryImpl extends RelDataTypeFactoryImpl {
         protected void generateTypeString( StringBuilder sb, boolean withDetail ) {
             sb.append( "UNKNOWN" );
         }
+
     }
+
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,10 +21,17 @@ import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.polypheny.db.catalog.exceptions.GenericRuntimeException;
 import org.polypheny.db.config.Config.ConfigListener;
+import org.polypheny.db.ddl.DdlManager.DefaultIndexPlacementStrategy;
+import org.polypheny.db.processing.ConstraintStrategy;
 import org.polypheny.db.util.background.BackgroundTask;
+import org.polypheny.db.util.background.BackgroundTask.TaskSchedulingType;
 
 
+@Slf4j
 public enum RuntimeConfig {
 
     APPROXIMATE_DISTINCT_COUNT(
@@ -55,16 +62,21 @@ public enum RuntimeConfig {
             ConfigType.BOOLEAN
     ), // Druid
 
-    CASE_SENSITIVE(
-            "runtime/caseSensitive",
-            "Whether identifiers are matched case-sensitively.",
+    RELATIONAL_NAMESPACE_DEFAULT_CASE_SENSITIVE(
+            "runtime/relationalCaseSensitive",
+            "Whether a relational namespace is case-sensitive if not specified otherwise.",
             false,
             ConfigType.BOOLEAN
     ),
-
-    SPARK_ENGINE(
-            "runtime/sparkEngine",
-            "Specifies whether Spark should be used as the engine for processing that cannot be pushed to the source system. If false, Polypheny-DB generates code that implements the Enumerable interface.",
+    DOCUMENT_NAMESPACE_DEFAULT_CASE_SENSITIVE(
+            "runtime/documentCaseSensitive",
+            "Whether a document namespace is case-sensitive if not specified otherwise.",
+            false,
+            ConfigType.BOOLEAN
+    ),
+    GRAPH_NAMESPACE_DEFAULT_CASE_SENSITIVE(
+            "runtime/graphCaseSensitive",
+            "Whether a graph (namespace) is case-sensitive if not specified otherwise.",
             false,
             ConfigType.BOOLEAN
     ),
@@ -86,246 +98,429 @@ public enum RuntimeConfig {
     WEBUI_SERVER_PORT(
             "runtime/webuiServerPort",
             "The port on which the web ui server should listen.",
-            8080,
+            7659,
             ConfigType.INTEGER
     ),
 
-    REL_WRITER_INSERT_FIELD_NAMES( "runtime/relWriterInsertFieldName",
-            "If the rel writer should add the field names in brackets behind the ordinals in when printing query plans.",
+    REL_WRITER_INSERT_FIELD_NAMES(
+            "runtime/relWriterInsertFieldName",
+            "If the alg writer should add the field names in brackets behind the ordinals in when printing query plans.",
             false,
             ConfigType.BOOLEAN ),
 
-    QUERY_TIMEOUT( "runtime/queryTimeout",
+    QUERY_TIMEOUT(
+            "runtime/queryTimeout",
             "Time after which queries are aborted. 0 means infinite.",
             0,
             ConfigType.INTEGER,
-            "runtimExecutionGroup" ),
+            "processingExecutionGroup" ),
 
-    DEFAULT_COLLATION( "runtime/defaultCollation",
+    DEFAULT_COLLATION(
+            "runtime/defaultCollation",
             "Collation to use if no collation is specified",
             2,
             ConfigType.INTEGER ),
 
-    GENERATED_NAME_PREFIX( "runtime/generatedNamePrefix",
+    GENERATED_NAME_PREFIX(
+            "runtime/generatedNamePrefix",
             "Prefix for generated index, foreign key and constraint names.",
             "auto",
             ConfigType.STRING ),
 
-    ADD_DEFAULT_VALUES_IN_INSERTS( "processing/addDefaultValuesInInserts",
+    ADD_DEFAULT_VALUES_IN_INSERTS(
+            "processing/addDefaultValuesInInserts",
             "Reorder columns and add default values in insert statements.",
             true,
             ConfigType.BOOLEAN,
             "parsingGroup" ),
 
-    TRIM_UNUSED_FIELDS( "processing/trimUnusedFields",
-            "Walks over a tree of relational expressions, replacing each RelNode with a 'slimmed down' relational expression that projects only the columns required by its consumer.",
+    TRIM_UNUSED_FIELDS(
+            "processing/trimUnusedFields",
+            "Walks over a tree of relational expressions, replacing each {@link AlgNode} with a 'slimmed down' relational expression that projects only the columns required by its consumer.",
             true,
             ConfigType.BOOLEAN,
             "planningGroup" ),
 
-    DEBUG( "runtime/debug",
+    DEBUG(
+            "runtime/debug",
             "Print debugging output.",
             false,
             ConfigType.BOOLEAN ),
 
-    JOIN_COMMUTE( "runtime/joinCommute",
+    JOIN_COMMUTE(
+            "runtime/joinCommute",
             "Commute joins in planner.",
             false,
             ConfigType.BOOLEAN,
             "planningGroup" ),
 
-    VALIDATE_MM_CONTENT_TYPE( "validation/validateMultimediaContentType",
+    VALIDATE_MM_CONTENT_TYPE(
+            "validation/validateMultimediaContentType",
             "Validate multimedia data by checking its content-type.",
             true,
             ConfigType.BOOLEAN,
             "validationGroup"
     ),
 
-    TWO_PC_MODE( "runtime/twoPcMode",
+    TWO_PC_MODE(
+            "runtime/twoPcMode",
             "Use two-phase commit protocol for committing queries on data stores.",
             false,
-            ConfigType.BOOLEAN,
-            "runtimExecutionGroup" ),
+            ConfigType.BOOLEAN ),
+    // "processingExecutionGroup" ),
 
-    DYNAMIC_QUERYING( "statistics/useDynamicQuerying",
+    DYNAMIC_QUERYING(
+            "statistics/useDynamicQuerying",
             "Use statistics for query assistance.",
             true,
             ConfigType.BOOLEAN,
             "statisticSettingsGroup" ),
 
-    STATISTICS_ON_STARTUP( "statistics/statisticsOnStartup",
+    STATISTICS_ON_STARTUP(
+            "statistics/statisticsOnStartup",
             "Whether to build statistics for all stored data on system startup.",
             true,
             ConfigType.BOOLEAN,
             "statisticSettingsGroup" ),
 
-    ACTIVE_TRACKING( "statistics/activeTracking",
+    ACTIVE_TRACKING(
+            "statistics/activeTracking",
             "All transactions are tracked and statistics collected during execution.",
             true,
             ConfigType.BOOLEAN,
             "statisticSettingsGroup" ),
 
-    PASSIVE_TRACKING( "statistics/passiveTracking",
+    PASSIVE_TRACKING(
+            "statistics/passiveTracking",
             "Reevaluates statistics for all columns constantly, after a set time interval.",
             false,
             ConfigType.BOOLEAN,
             "statisticSettingsGroup" ),
 
-    STATISTIC_BUFFER( "statistics/statisticColumnBuffer",
+    STATISTIC_BUFFER(
+            "statistics/statisticColumnBuffer",
             "Number of buffered statistics e.g. for unique values.",
             5,
             ConfigType.INTEGER,
             "statisticSettingsGroup" ),
 
-    UNIQUE_VALUES( "statistics/maxCharUniqueVal",
+    UNIQUE_VALUES(
+            "statistics/maxCharUniqueVal",
             "Maximum character of unique values",
             10,
             ConfigType.INTEGER,
             "statisticSettingsGroup" ),
 
-    STATISTIC_RATE( "statistics/passiveTrackingRate",
+    STATISTIC_RATE(
+            "statistics/passiveTrackingRate",
             "Rate of passive tracking of statistics.",
-            BackgroundTask.TaskSchedulingType.EVERY_THIRTY_SECONDS,
+            BackgroundTask.TaskSchedulingType.EVERY_THIRTY_SECONDS_FIXED,
             ConfigType.ENUM ),
 
-    EXPLORE_BY_EXAMPLE_TO_SQL( "exploreByExample/classificationToSQL",
+    MATERIALIZED_VIEW_LOOP(
+            "materializedView/freshnessLoopRate",
+            "Rate of freshness Loop for Materialized Views with update type interval.",
+            TaskSchedulingType.EVERY_SECOND_FIXED,
+            ConfigType.ENUM ),
+
+    EXPLORE_BY_EXAMPLE_TO_SQL(
+            "exploreByExample/classificationToSQL",
             "Build SQL query from classification.",
             true,
             ConfigType.BOOLEAN,
-            "exploreByExampleGroup" ),
+            "uiSettings" ),
 
-    UI_PAGE_SIZE( "ui/pageSize",
+    UI_PAGE_SIZE(
+            "ui/pageSize",
             "Number of rows per page in the data view.",
             10,
             ConfigType.INTEGER,
             "uiSettingsDataViewGroup" ),
 
-    UI_UPLOAD_SIZE_MB( "ui/uploadSizeMB",
+    UI_NODE_AMOUNT(
+            "ui/nodeAmount",
+            "Number of nodes in the graph data view.",
+            300,
+            ConfigType.INTEGER,
+            "uiSettingsDataViewGroup" ),
+
+    UI_UPLOAD_SIZE_MB(
+            "ui/uploadSizeMB",
             "Maximum size of a file upload for multimedia data in the UI, in MB. "
                     + "When creating a HSQLDB multimedia column, this size is applied as the max-size of the underlying HSQLDB BLOB column.",
             10_000,
             ConfigType.INTEGER,
             "uiSettingsDataViewGroup" ),
 
-    UI_USE_HARDLINKS( "ui/useHardlinks",
+    UI_USE_HARDLINKS(
+            "ui/useHardlinks",
             "Whether or not to use hardlinks for temporal files in the UI. If false, softlinks are used. This config has only an effect when one or multiple file stores are deployed. "
-                    + "With hardlinks, the data you see is is the correct data that was selected during the transaction. "
+                    + "With hardlinks, the data you see is the correct data that was selected during the transaction. "
                     + "But with multiple file stores on different file systems, hardlinks won't work. "
                     + "In this case you can use softlinks, but you might see data that is more recent.",
             true,
             ConfigType.BOOLEAN,
             "uiSettingsDataViewGroup" ),
 
-    HUB_IMPORT_BATCH_SIZE( "hub/hubImportBatchSize",
+    HUB_IMPORT_BATCH_SIZE(
+            "hub/hubImportBatchSize",
             "Number of rows that should be inserted at a time when importing a dataset from Polypheny-Hub.",
-            100,
+            1000,
             ConfigType.INTEGER,
             "uiSettingsDataViewGroup" ),
 
-    SCHEMA_CACHING( "runtime/schemaCaching",
+    SCHEMA_CACHING(
+            "runtime/schemaCaching",
             "Cache polypheny-db schema",
             true,
             ConfigType.BOOLEAN ),
 
-    QUERY_PLAN_CACHING( "runtime/queryPlanCaching",
+    QUERY_PLAN_CACHING(
+            "runtime/queryPlanCaching",
             "Cache planned and optimized query plans.",
             true,
             ConfigType.BOOLEAN,
             "queryPlanCachingGroup" ),
 
-    QUERY_PLAN_CACHING_DML( "runtime/queryPlanCachingDml",
+    QUERY_PLAN_CACHING_DML(
+            "runtime/queryPlanCachingDml",
             "Cache DML query plans.",
-            false,
+            true,
             ConfigType.BOOLEAN,
             "queryPlanCachingGroup" ),
 
-    QUERY_PLAN_CACHING_SIZE( "runtime/queryPlanCachingSize",
+    QUERY_PLAN_CACHING_SIZE(
+            "runtime/queryPlanCachingSize",
             "Size of the query plan cache. If the limit is reached, the least recently used entry is removed.",
             1000,
             ConfigType.INTEGER,
             "queryPlanCachingGroup" ),
 
-    IMPLEMENTATION_CACHING( "runtime/implementationCaching",
+    IMPLEMENTATION_CACHING(
+            "runtime/implementationCaching",
             "Cache implemented query plans.",
             true,
             ConfigType.BOOLEAN,
             "implementationCachingGroup" ),
 
-    IMPLEMENTATION_CACHING_DML( "runtime/implementationCachingDml",
+    IMPLEMENTATION_CACHING_DML(
+            "runtime/implementationCachingDml",
             "Cache implementation for DML queries.",
-            false,
+            true,
             ConfigType.BOOLEAN,
             "implementationCachingGroup" ),
 
-    IMPLEMENTATION_CACHING_SIZE( "runtime/implementationCachingSize",
+    IMPLEMENTATION_CACHING_SIZE(
+            "runtime/implementationCachingSize",
             "Size of the implementation cache. If the limit is reached, the least recently used entry is removed.",
             1000,
             ConfigType.INTEGER,
             "implementationCachingGroup" ),
 
-    PARAMETERIZE_DML( "runtime/parameterizeDML",
+    ROUTING_PLAN_CACHING(
+            "runtime/routingPlanCaching",
+            "Caching of routing plans.",
+            true,
+            ConfigType.BOOLEAN,
+            "routingCache" ),
+
+    ROUTING_PLAN_CACHING_SIZE(
+            "runtime/routingPlanCachingSize",
+            "Size of the routing plan cache. If the limit is reached, the least recently used entry is removed.",
+            1000,
+            ConfigType.INTEGER,
+            "routingCache" ),
+
+    PARAMETERIZE_DML(
+            "runtime/parameterizeDML",
             "Whether DML queries should be parameterized.",
             true,
             ConfigType.BOOLEAN,
             "queryParameterizationGroup" ),
 
-    PARAMETERIZE_INTERVALS( "runtime/parameterizeIntervals",
+    PARAMETERIZE_INTERVALS(
+            "runtime/parameterizeIntervals",
             "Whether intervals should be parameterized.",
             false,
             ConfigType.BOOLEAN,
             "queryParameterizationGroup" ),
 
-    JOINED_TABLE_SCAN_CACHE( "runtime/joinedTableScanCache",
-            "Whether to use the joined table scan caching.",
+    JOINED_TABLE_SCAN_CACHE(
+            "runtime/joinedScanCache",
+            "Whether to use the joined table relScan caching.",
             false,
             ConfigType.BOOLEAN ),
 
-    JOINED_TABLE_SCAN_CACHE_SIZE( "runtime/joinedTableScanCacheSize",
-            "Size of the joined table scan cache. If the limit is reached, the least recently used entry is removed.",
+    JOINED_TABLE_SCAN_CACHE_SIZE(
+            "runtime/joinedScanCacheSize",
+            "Size of the joined table relScan cache. If the limit is reached, the least recently used entry is removed.",
             1000,
             ConfigType.INTEGER ),
 
-    DATA_MIGRATOR_BATCH_SIZE( "runtime/dataMigratorBatchSize",
+    DATA_MIGRATOR_BATCH_SIZE(
+            "runtime/dataMigratorBatchSize",
             "Batch size for data insertion on the target store.",
             1000,
             ConfigType.INTEGER ),
 
-    UNIQUE_CONSTRAINT_ENFORCEMENT( "runtime/uniqueConstraintEnforcement",
+    UNIQUE_CONSTRAINT_ENFORCEMENT(
+            "runtime/uniqueConstraintEnforcement",
             "Enable enforcement of uniqueness constraints.",
             false,
             ConfigType.BOOLEAN,
             "constraintEnforcementGroup" ),
 
-    FOREIGN_KEY_ENFORCEMENT( "runtime/foreignKeyEnforcement",
+    FOREIGN_KEY_ENFORCEMENT(
+            "runtime/foreignKeyEnforcement",
             "Enable enforcement of foreign key constraints.",
             false,
             ConfigType.BOOLEAN,
             "constraintEnforcementGroup" ),
 
-    POLYSTORE_INDEXES_ENABLED( "runtime/polystoreIndexesEnabled",
+    CONSTRAINT_ENFORCEMENT_STRATEGY(
+            "runtime/constraintEnforcementStrategy",
+            "Adjusted used constraint enforcement strategy.",
+            ConstraintStrategy.AFTER_QUERY_EXECUTION,
+            ConfigType.ENUM,
+            "constraintEnforcementGroup"
+    ),
+
+    DEFAULT_INDEX_PLACEMENT_STRATEGY(
+            "runtime/indexPlacementStrategy",
+            "Where indexes should be placed if not explicitly specified.",
+            DefaultIndexPlacementStrategy.ALL_DATA_STORES,
+            ConfigType.ENUM,
+            "polystoreIndexGroup"
+    ),
+
+    POLYSTORE_INDEXES_ENABLED(
+            "runtime/polystoreIndexesEnabled",
             "Enable and maintain indexes on the polystore level.",
             true,
             ConfigType.BOOLEAN,
             "polystoreIndexGroup" ),
 
-    POLYSTORE_INDEXES_SIMPLIFY( "runtime/polystoreIndexesSimplify",
+    POLYSTORE_INDEXES_SIMPLIFY(
+            "runtime/polystoreIndexesSimplify",
             "Enable query simplification using polystore level indexes.",
             false,
             ConfigType.BOOLEAN,
             "polystoreIndexGroup" ),
 
-    DOCKER_INSTANCES( "runtime/dockerInstances",
+    DOCKER_INSTANCES(
+            "runtime/dockerInstances",
             "Configure different docker instances, which can be used to place adapters on.",
-            Collections.singletonList( new ConfigDocker( 0, "localhost", null, null, "localhost" )
-                    .setDockerRunning( true ) ),
-            ConfigType.INSTANCE_LIST,
-            "dockerGroup" ),
+            Collections.EMPTY_LIST,
+            ConfigType.DOCKER_LIST,
+            "dockerHostsGroup" ),
 
-    FILE_HANDLE_CACHE_SIZE( "runtime/fileHandleCacheSize",
+    DOCKER_CONTAINER_REGISTRY(
+            "docker/defaultContainerRegistry",
+            "The default container registry to be used when pull container. Default is Docker Hub.",
+            "docker.io",
+            ConfigType.STRING,
+            "dockerGeneralGroup" ),
+
+    FILE_HANDLE_CACHE_SIZE(
+            "runtime/fileHandleCacheSize",
             "Size (in Bytes) up to which media files are cached in-memory instead of creating a temporary file. Needs to be >= 0 and smaller than Integer.MAX_SIZE. Setting to zero disables caching of media files.",
             0,
             ConfigType.INTEGER,
-            "runtimExecutionGroup" );
+            "processingExecutionGroup" ),
+
+    MONITORING_QUEUE_ACTIVE(
+            "runtime/monitoringQueueActive",
+            "Enables automatic monitoring of executed events in workload monitoring. If disabled no events are captured, hence the queue remains empty. This also effects routing!",
+            true,
+            ConfigType.BOOLEAN,
+            "monitoringSettingsQueueGroup" ),
+
+    MONITORING_CORE_POOL_SIZE(
+            "runtime/corePoolSize",
+            "The number of threads to keep in the pool for processing workload monitoring events, even if they are idle.",
+            2,
+            ConfigType.INTEGER,
+            "monitoringSettingsQueueGroup" ),
+
+    MONITORING_MAXIMUM_POOL_SIZE(
+            "runtime/maximumPoolSize",
+            "The maximum number of threads to allow in the pool used for processing workload monitoring events.",
+            8,
+            ConfigType.INTEGER,
+            "monitoringSettingsQueueGroup" ),
+
+    MONITORING_POOL_KEEP_ALIVE_TIME(
+            "runtime/keepAliveTime",
+            "When the number of monitoring processing threads is greater than the core, this is the maximum time that excess idle threads will wait for new tasks before terminating.",
+            10,
+            ConfigType.INTEGER,
+            "monitoringSettingsQueueGroup" ),
+
+    TEMPERATURE_FREQUENCY_PROCESSING_INTERVAL(
+            "runtime/partitionFrequencyProcessingInterval",
+            "Time interval in seconds, how often the access frequency of all TEMPERATURE-partitioned tables is analyzed and redistributed",
+            BackgroundTask.TaskSchedulingType.EVERY_MINUTE,
+            ConfigType.ENUM,
+            "temperaturePartitionProcessingSettingsGroup" ),
+
+    CATALOG_DEBUG_MESSAGES(
+            "runtime/catalogDebugMessages",
+            "Enable output of catalog debug messages on the monitoring page.",
+            false,
+            ConfigType.BOOLEAN,
+            "monitoringGroup" ),
+
+    AVAILABLE_PLUGINS(
+            "runtime/availablePlugins",
+            "All plugins, which are available, be it active, only loaded or unloaded.",
+            List.of(),
+            ConfigType.PLUGIN_LIST,
+            "pluginsGroup"
+    ),
+
+    BLOCKED_PLUGINS(
+            "runtime/blockedPlugins",
+            "All plugins, which are blocked by default.",
+            List.of( "druid-adapter",
+                    "elasticsearch-adapter",
+                    "geode-adapter",
+                    "html-adapter",
+                    "pig-adapter" ),
+            ConfigType.STRING_LIST
+    ),
+
+    INSTANCE_UUID(
+            "runtime/uuid",
+            "Unique ID of this instance of Polypheny.",
+            "WARNING! YOU SHOULD NOT BE SEEING THIS",
+            ConfigType.STRING
+    ),
+
+    DOCKER_TIMEOUT(
+            "runtime/dockerTimeout",
+            "Connection and respones timeout for autodocker.",
+            45,
+            ConfigType.INTEGER
+    ),
+
+    DOCKER_DIRECT_CONNECTION(
+            "runtime/dockerDirectConnection",
+            "Use direct connections to Docker containers in benchmark mode.",
+            true,
+            ConfigType.BOOLEAN
+    ),
+
+    SERIALIZATION_BUFFER_SIZE(
+            "runtime/serialization",
+            "How big the buffersize for catalog objects should be.",
+            200000,
+            ConfigType.INTEGER ),
+
+    LOCKING_MAX_TIMEOUT_SECONDS(
+            "runtime/maxTimeout",
+            "How long a transactions should wait for a lock until it is aborted",
+            90,
+            ConfigType.INTEGER );
 
 
     private final String key;
@@ -342,12 +537,11 @@ public enum RuntimeConfig {
                 "processingPage",
                 "Query Processing",
                 "Settings influencing the query processing." );
+        //processingPage.withIcon( "fa fa-cogs" );
         final WebUiGroup planningGroup = new WebUiGroup( "planningGroup", processingPage.getId() );
         planningGroup.withTitle( "Query Planning" );
         final WebUiGroup parsingGroup = new WebUiGroup( "parsingGroup", processingPage.getId() );
         parsingGroup.withTitle( "Query Parsing" );
-        final WebUiGroup queryPlanCachingGroup = new WebUiGroup( "queryPlanCachingGroup", processingPage.getId() );
-        queryPlanCachingGroup.withTitle( "Query Plan Caching" );
         final WebUiGroup implementationCachingGroup = new WebUiGroup( "implementationCachingGroup", processingPage.getId() );
         implementationCachingGroup.withTitle( "Implementation Caching" );
         final WebUiGroup queryParameterizationGroup = new WebUiGroup( "queryParameterizationGroup", processingPage.getId() );
@@ -358,65 +552,106 @@ public enum RuntimeConfig {
         polystoreIndexGroup.withTitle( "Polystore Indexes" );
         final WebUiGroup validationGroup = new WebUiGroup( "validationGroup", processingPage.getId() );
         validationGroup.withTitle( "Query Validation" );
+        final WebUiGroup executionGroup = new WebUiGroup( "processingExecutionGroup", processingPage.getId() );
+        executionGroup.withTitle( "Query Execution" );
         configManager.registerWebUiPage( processingPage );
         configManager.registerWebUiGroup( parsingGroup );
         configManager.registerWebUiGroup( planningGroup );
-        configManager.registerWebUiGroup( queryPlanCachingGroup );
         configManager.registerWebUiGroup( implementationCachingGroup );
         configManager.registerWebUiGroup( queryParameterizationGroup );
         configManager.registerWebUiGroup( constraintEnforcementGroup );
         configManager.registerWebUiGroup( polystoreIndexGroup );
         configManager.registerWebUiGroup( validationGroup );
+        configManager.registerWebUiGroup( executionGroup );
 
-        // Runtime settings
-        final WebUiPage runtimePage = new WebUiPage(
-                "runtimePage",
-                "Runtime Settings",
-                "Settings influencing the runtime behavior of the whole system." );
-        final WebUiGroup runtimExecutionGroup = new WebUiGroup( "runtimExecutionGroup", runtimePage.getId() );
-        runtimExecutionGroup.withTitle( "Query Execution" );
-        configManager.registerWebUiPage( runtimePage );
-        configManager.registerWebUiGroup( runtimExecutionGroup );
+        // Routing
+        final WebUiPage routingPage = new WebUiPage(
+                "routing",
+                "Query Routing",
+                "Settings influencing the query routing behavior." );
+        //routingPage.withIcon( "fa fa-map-signs" );
+        final WebUiGroup routingCacheGroup = new WebUiGroup( "routingCache", routingPage.getId() );
+        routingCacheGroup.withTitle( "Caching" );
+        configManager.registerWebUiPage( routingPage );
+        configManager.registerWebUiGroup( routingCacheGroup );
 
-        // Statistics and dynamic querying settings
+        // Statistics
         final WebUiPage queryStatisticsPage = new WebUiPage(
-                "queryStatisticsPage",
-                "Dynamic Querying",
-                "Settings for the dynamic querying component." );
+                "statisticsPage",
+                "Statistics",
+                "Settings on the stored data." );
+        //queryStatisticsPage.withIcon( "fa fa-percent" );
         final WebUiGroup statisticSettingsGroup = new WebUiGroup( "statisticSettingsGroup", queryStatisticsPage.getId() );
         statisticSettingsGroup.withTitle( "Statistics Settings" );
         configManager.registerWebUiPage( queryStatisticsPage );
         configManager.registerWebUiGroup( statisticSettingsGroup );
 
-        //Explore by Example Settings
-        final WebUiPage exploreByExamplePage = new WebUiPage(
-                "exploreByExamplePage",
-                "Explore by Example",
-                "Settings for the Explore-by-Example component." );
-        final WebUiGroup exploreByExampleGroup = new WebUiGroup( "exploreByExampleGroup", exploreByExamplePage.getId() );
-        exploreByExampleGroup.withTitle( "Explore by Example" );
-        configManager.registerWebUiPage( exploreByExamplePage );
-        configManager.registerWebUiGroup( exploreByExampleGroup );
-
-        //Docker Settings
+        // Docker Settings
         final WebUiPage dockerPage = new WebUiPage(
                 "dockerPage",
                 "Docker",
-                "Settings for using Docker in Polypheny." );
-        final WebUiGroup dockerGroup = new WebUiGroup( "dockerGroup", dockerPage.getId() );
-        dockerGroup.withTitle( "Docker" );
+                "Settings and configuration related to Docker" );
+
         configManager.registerWebUiPage( dockerPage );
-        configManager.registerWebUiGroup( dockerGroup );
+
+        // Plugin Settings
+        final WebUiPage pluginPage = new WebUiPage(
+                "pluginsPage",
+                "Plugins",
+                "Settings regarding plugins." ).setFullWidth( true );
+
+        final WebUiGroup pluginGroup = new WebUiGroup( "pluginsGroup", pluginPage.getId() );
+        configManager.registerWebUiPage( pluginPage );
+        configManager.registerWebUiGroup( pluginGroup );
 
         // UI specific setting
         final WebUiPage uiSettingsPage = new WebUiPage(
                 "uiSettings",
                 "Polypheny-UI",
-                "Settings for the user interface." );
+                "Settings for this user interface." );
+        //uiSettingsPage.withIcon( "fa fa-window-maximize" );
+        configManager.registerWebUiPage( uiSettingsPage );
         final WebUiGroup uiSettingsDataViewGroup = new WebUiGroup( "uiSettingsDataViewGroup", uiSettingsPage.getId() );
         uiSettingsDataViewGroup.withTitle( "Data View" );
-        configManager.registerWebUiPage( uiSettingsPage );
         configManager.registerWebUiGroup( uiSettingsDataViewGroup );
+        final WebUiGroup monitoringGroup = new WebUiGroup( "monitoringGroup", uiSettingsPage.getId() );
+        monitoringGroup.withTitle( "Monitoring" );
+        configManager.registerWebUiGroup( monitoringGroup );
+
+        // Workload Monitoring specific setting
+        final WebUiPage monitoringSettingsPage = new WebUiPage(
+                "monitoringSettings",
+                "Workload Monitoring",
+                "Settings for workload monitoring." );
+        //monitoringSettingsPage.withIcon( "fa fa-line-chart" );
+        final WebUiGroup monitoringSettingsQueueGroup = new WebUiGroup( "monitoringSettingsQueueGroup", monitoringSettingsPage.getId() );
+        monitoringSettingsQueueGroup.withTitle( "Processing Queue" );
+        configManager.registerWebUiPage( monitoringSettingsPage );
+        configManager.registerWebUiGroup( monitoringSettingsQueueGroup );
+        MONITORING_QUEUE_ACTIVE.addObserver( new ConfigListener() {
+            @Override
+            public void onConfigChange( Config c ) {
+                String status = c.getBoolean() ? "Enabled" : "Disabled";
+                log.warn( "{} workload monitoring", status );
+            }
+
+
+            @Override
+            public void restart( Config c ) {
+
+            }
+        } );
+
+        // Partitioning
+        final WebUiPage partitionSettingsPage = new WebUiPage(
+                "partitionSettings",
+                "Partitioning",
+                "Settings for partitioning" );
+        //partitionSettingsPage.withIcon( "fa fa-thermometer-three-quarters" );
+        final WebUiGroup temperaturePartitionProcessingSettingsGroup = new WebUiGroup( "temperaturePartitionProcessingSettingsGroup", partitionSettingsPage.getId() );
+        temperaturePartitionProcessingSettingsGroup.withTitle( "TEMPERATURE Partition Processing" );
+        configManager.registerWebUiPage( partitionSettingsPage );
+        configManager.registerWebUiGroup( temperaturePartitionProcessingSettingsGroup );
     }
 
 
@@ -429,95 +664,30 @@ public enum RuntimeConfig {
         this.key = key;
         this.description = description;
 
-        final Config config;
-        switch ( configType ) {
-            case BOOLEAN:
-                config = new ConfigBoolean( key, description, (boolean) defaultValue );
-                break;
-
-            case DECIMAL:
-                config = new ConfigDecimal( key, description, (BigDecimal) defaultValue );
-                break;
-
-            case DOUBLE:
-                config = new ConfigDouble( key, description, (double) defaultValue );
-                break;
-
-            case INTEGER:
-                config = new ConfigInteger( key, description, (int) defaultValue );
-                break;
-
-            case LONG:
-                config = new ConfigLong( key, description, (long) defaultValue );
-                break;
-
-            case STRING:
-                config = new ConfigString( key, description, (String) defaultValue );
-                break;
-
-            case ENUM:
-                config = new ConfigEnum( key, description, defaultValue.getClass(), (Enum) defaultValue );
-                break;
-
-            case BOOLEAN_TABLE:
-                config = new ConfigTable( key, (boolean[][]) defaultValue );
-                break;
-
-            case DECIMAL_TABLE:
-                config = new ConfigTable( key, (BigDecimal[][]) defaultValue );
-                break;
-
-            case DOUBLE_TABLE:
-                config = new ConfigTable( key, (double[][]) defaultValue );
-                break;
-
-            case INTEGER_TABLE:
-                config = new ConfigTable( key, (int[][]) defaultValue );
-                break;
-
-            case LONG_TABLE:
-                config = new ConfigTable( key, (long[][]) defaultValue );
-                break;
-
-            case STRING_TABLE:
-                config = new ConfigTable( key, (String[][]) defaultValue );
-                break;
-
-            case BOOLEAN_ARRAY:
-                config = new ConfigArray( key, (boolean[]) defaultValue );
-                break;
-
-            case DECIMAL_ARRAY:
-                config = new ConfigArray( key, (BigDecimal[]) defaultValue );
-                break;
-
-            case DOUBLE_ARRAY:
-                config = new ConfigArray( key, (double[]) defaultValue );
-                break;
-
-            case INTEGER_ARRAY:
-                config = new ConfigArray( key, (int[]) defaultValue );
-                break;
-
-            case LONG_ARRAY:
-                config = new ConfigArray( key, (long[]) defaultValue );
-                break;
-
-            case STRING_ARRAY:
-                config = new ConfigArray( key, (String[]) defaultValue );
-                break;
-
-            case STRING_LIST:
-                config = new ConfigList( key, (List<?>) defaultValue, String.class );
-                break;
-
-            case INSTANCE_LIST:
-                config = new ConfigList( key, (List<?>) defaultValue, ConfigDocker.class );
-                break;
-
-            default:
-                throw new RuntimeException( "Unknown config type: " + configType.name() );
-        }
+        final Config config = switch ( configType ) {
+            case BOOLEAN -> new ConfigBoolean( key, description, (boolean) defaultValue );
+            case DECIMAL -> new ConfigDecimal( key, description, (BigDecimal) defaultValue );
+            case DOUBLE -> new ConfigDouble( key, description, (double) defaultValue );
+            case INTEGER -> new ConfigInteger( key, description, (int) defaultValue );
+            case LONG -> new ConfigLong( key, description, (long) defaultValue );
+            case STRING -> new ConfigString( key, description, (String) defaultValue );
+            case ENUM -> new ConfigEnum( key, description, defaultValue.getClass(), (Enum) defaultValue );
+            case BOOLEAN_TABLE -> new ConfigTable( key, (boolean[][]) defaultValue );
+            case DECIMAL_TABLE -> new ConfigTable( key, (BigDecimal[][]) defaultValue );
+            case DOUBLE_TABLE -> new ConfigTable( key, (double[][]) defaultValue );
+            case INTEGER_TABLE -> new ConfigTable( key, (int[][]) defaultValue );
+            case LONG_TABLE -> new ConfigTable( key, (long[][]) defaultValue );
+            case STRING_TABLE -> new ConfigTable( key, (String[][]) defaultValue );
+            case BOOLEAN_ARRAY -> new ConfigArray( key, (boolean[]) defaultValue );
+            case DECIMAL_ARRAY -> new ConfigArray( key, (BigDecimal[]) defaultValue );
+            case DOUBLE_ARRAY -> new ConfigArray( key, (double[]) defaultValue );
+            case INTEGER_ARRAY -> new ConfigArray( key, (int[]) defaultValue );
+            case LONG_ARRAY -> new ConfigArray( key, (long[]) defaultValue );
+            case STRING_ARRAY -> new ConfigArray( key, (String[]) defaultValue );
+            case STRING_LIST -> new ConfigList( key, (List<?>) defaultValue, String.class );
+            case DOCKER_LIST -> new ConfigList( key, (List<?>) defaultValue, ConfigDocker.class );
+            case PLUGIN_LIST -> new ConfigList( key, (List<?>) defaultValue, ConfigPlugin.class );
+        };
         configManager.registerConfig( config );
         if ( webUiGroup != null ) {
             config.withUi( webUiGroup );
@@ -587,6 +757,11 @@ public enum RuntimeConfig {
     }
 
 
+    public void setEnum( Enum value ) {
+        configManager.getConfig( key ).setEnum( value );
+    }
+
+
     public void setInteger( final int value ) {
         configManager.getConfig( key ).setInt( value );
     }
@@ -607,6 +782,11 @@ public enum RuntimeConfig {
     }
 
 
+    public void setRequiresRestart( boolean requiresRestart ) {
+        configManager.getConfig( key ).requiresRestart( requiresRestart );
+    }
+
+
     public void addObserver( final ConfigListener listener ) {
         configManager.getConfig( key ).addObserver( listener );
     }
@@ -622,13 +802,47 @@ public enum RuntimeConfig {
         if ( optional.isPresent() ) {
             return optional.get();
         } else {
-            throw new RuntimeException( "The was an error while retrieving the config." );
+            throw new GenericRuntimeException( "The was an error while retrieving the config." );
         }
     }
 
 
+    @Getter
     public enum ConfigType {
-        BOOLEAN, DECIMAL, DOUBLE, INTEGER, LONG, STRING, ENUM, BOOLEAN_TABLE, DECIMAL_TABLE, DOUBLE_TABLE, INTEGER_TABLE, LONG_TABLE, STRING_TABLE, BOOLEAN_ARRAY, DECIMAL_ARRAY, DOUBLE_ARRAY, INTEGER_ARRAY, LONG_ARRAY, STRING_ARRAY, STRING_LIST, INSTANCE_LIST
+        BOOLEAN,
+        DECIMAL,
+        DOUBLE,
+        INTEGER,
+        LONG,
+        STRING,
+        ENUM,
+        BOOLEAN_TABLE,
+        DECIMAL_TABLE,
+        DOUBLE_TABLE,
+        INTEGER_TABLE,
+        LONG_TABLE,
+        STRING_TABLE,
+        BOOLEAN_ARRAY,
+        DECIMAL_ARRAY,
+        DOUBLE_ARRAY,
+        INTEGER_ARRAY,
+        LONG_ARRAY,
+        STRING_ARRAY,
+        STRING_LIST,
+        DOCKER_LIST( ConfigDocker.class ),
+        PLUGIN_LIST( ConfigPlugin.class );
+
+        private final Class<? extends ConfigObject> clazz;
+
+
+        ConfigType( Class<? extends ConfigObject> clazz ) {
+            this.clazz = clazz;
+        }
+
+
+        ConfigType() {
+            this.clazz = null;
+        }
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,28 +17,19 @@
 package org.polypheny.db.iface;
 
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonSerializer;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Modifier;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import lombok.AllArgsConstructor;
+import java.util.concurrent.atomic.AtomicReference;
 import lombok.extern.slf4j.Slf4j;
 import org.polypheny.db.catalog.Catalog;
-import org.polypheny.db.catalog.entity.CatalogQueryInterface;
-import org.polypheny.db.catalog.exceptions.UnknownQueryInterfaceException;
+import org.polypheny.db.catalog.entity.LogicalQueryInterface;
+import org.polypheny.db.catalog.exceptions.GenericRuntimeException;
+import org.polypheny.db.catalog.snapshot.Snapshot;
 import org.polypheny.db.iface.QueryInterface.QueryInterfaceSetting;
 import org.polypheny.db.transaction.TransactionManager;
-import org.reflections.Reflections;
 
 
 @Slf4j
@@ -46,9 +37,9 @@ public class QueryInterfaceManager {
 
     private static QueryInterfaceManager INSTANCE;
 
-    private final Map<Integer, QueryInterface> interfaceById = new HashMap<>();
+    private final Map<Long, QueryInterface> interfaceById = new HashMap<>();
     private final Map<String, QueryInterface> interfaceByName = new HashMap<>();
-    private final Map<Integer, Thread> interfaceThreadById = new HashMap<>();
+    private final Map<Long, Thread> interfaceThreadById = new HashMap<>();
 
     private final TransactionManager transactionManager;
     private final Authenticator authenticator;
@@ -56,7 +47,7 @@ public class QueryInterfaceManager {
 
     public static QueryInterfaceManager getInstance() {
         if ( INSTANCE == null ) {
-            throw new RuntimeException( "Interface manager has not yet been initialized" );
+            throw new GenericRuntimeException( "Interface manager has not yet been initialized" );
         }
         return INSTANCE;
     }
@@ -74,8 +65,23 @@ public class QueryInterfaceManager {
 
 
     public QueryInterface getQueryInterface( String uniqueName ) {
-        uniqueName = uniqueName.toLowerCase();
-        return interfaceByName.get( uniqueName );
+        return interfaceByName.get( uniqueName.toLowerCase() );
+    }
+
+
+    public static void addInterfaceTemplate(
+            String interfaceName, String description,
+            List<QueryInterfaceSetting> availableSettings, Function5<TransactionManager, Authenticator, String, Map<String, String>, QueryInterface> deployer ) {
+        Catalog.getInstance().createInterfaceTemplate( interfaceName, new QueryInterfaceTemplate( interfaceName, description,
+                deployer, availableSettings ) );
+    }
+
+
+    public static void removeInterfaceType( String interfaceName ) {
+        if ( Catalog.snapshot().getQueryInterfaces().values().stream().anyMatch( i -> i.getInterfaceType().equals( interfaceName ) ) ) {
+            throw new GenericRuntimeException( "Cannot remove the interface type, there is still a interface active." );
+        }
+        Catalog.getInstance().dropInterfaceTemplate( interfaceName );
     }
 
 
@@ -89,151 +95,118 @@ public class QueryInterfaceManager {
     }
 
 
-    public List<QueryInterfaceInformation> getAvailableQueryInterfaceTypes() {
-        Reflections reflections = new Reflections( "org.polypheny.db" );
-        Set<Class> classes = ImmutableSet.copyOf( reflections.getSubTypesOf( QueryInterface.class ) );
-        List<QueryInterfaceInformation> result = new LinkedList<>();
+    public List<QueryInterfaceTemplate> getAvailableQueryInterfaceTemplates() {
+        return Catalog.snapshot().getInterfaceTemplates();
+    }
+
+
+    private void startInterface( QueryInterface instance, String interfaceName, Long id ) {
+        Thread thread = new Thread( instance );
+        AtomicReference<Throwable> error = new AtomicReference<>();
+        thread.setUncaughtExceptionHandler( ( Thread t, Throwable e ) -> error.set( e ) );
+        thread.start();
+
         try {
-            //noinspection unchecked
-            for ( Class<QueryInterface> clazz : classes ) {
-                // Exclude abstract classes
-                if ( !Modifier.isAbstract( clazz.getModifiers() ) ) {
-                    String name = (String) clazz.getDeclaredField( "INTERFACE_NAME" ).get( null );
-                    String description = (String) clazz.getDeclaredField( "INTERFACE_DESCRIPTION" ).get( null );
-                    List<QueryInterfaceSetting> settings = (List<QueryInterfaceSetting>) clazz.getDeclaredField( "AVAILABLE_SETTINGS" ).get( null );
-                    result.add( new QueryInterfaceInformation( name, description, clazz, settings ) );
-                }
-            }
-        } catch ( NoSuchFieldException | IllegalAccessException e ) {
-            throw new RuntimeException( "Something went wrong while retrieving list of available query interface types.", e );
+            thread.join();
+        } catch ( InterruptedException e ) {
+            log.warn( "Interrupted on join()", e );
         }
-        return result;
+        if ( error.get() != null ) {
+            throw new GenericRuntimeException( error.get() );
+        }
+
+        if ( id == null ) {
+            id = Catalog.getInstance().createQueryInterface( instance.getUniqueName(), interfaceName, instance.getCurrentSettings() );
+        }
+        interfaceByName.put( instance.getUniqueName(), instance );
+        interfaceById.put( id, instance );
+        interfaceThreadById.put( id, thread );
     }
 
 
     /**
      * Restores query interfaces from catalog
      */
-    public void restoreInterfaces( Catalog catalog ) {
-        try {
-            List<CatalogQueryInterface> interfaces = catalog.getQueryInterfaces();
-            for ( CatalogQueryInterface iface : interfaces ) {
-                Class<?> clazz = Class.forName( iface.clazz );
-                Constructor<?> ctor = clazz.getConstructor( TransactionManager.class, Authenticator.class, int.class, String.class, Map.class );
-                QueryInterface instance = (QueryInterface) ctor.newInstance( transactionManager, authenticator, iface.id, iface.name, iface.settings );
-
-                Thread thread = new Thread( instance );
-                thread.start();
-
-                try {
-                    thread.join();
-                } catch ( InterruptedException e ) {
-                    log.warn( "Interrupted on join()", e );
+    public void restoreInterfaces( Snapshot snapshot ) {
+        Map<Long, LogicalQueryInterface> interfaces = snapshot.getQueryInterfaces();
+        interfaces.forEach( ( id, l ) -> {
+                    QueryInterface q = Catalog.snapshot().getInterfaceTemplate( l.interfaceType )
+                            .map( t -> t.deployer.get( transactionManager, authenticator, l.name, l.settings ) )
+                            .orElseThrow();
+                    startInterface( q, l.interfaceType, id );
                 }
-
-                interfaceByName.put( instance.getUniqueName(), instance );
-                interfaceById.put( instance.getQueryInterfaceId(), instance );
-                interfaceThreadById.put( instance.getQueryInterfaceId(), thread );
-            }
-        } catch ( NoSuchMethodException | ClassNotFoundException | InstantiationException | IllegalAccessException | InvocationTargetException e ) {
-            throw new RuntimeException( "Something went wrong while restoring query interfaces from the catalog.", e );
-        }
+        );
     }
 
 
-    public QueryInterface addQueryInterface( Catalog catalog, String clazzName, String uniqueName, Map<String, String> settings ) {
+    public QueryInterface createQueryInterface( String interfaceType, String uniqueName, Map<String, String> settings ) {
         uniqueName = uniqueName.toLowerCase();
         if ( interfaceByName.containsKey( uniqueName ) ) {
-            throw new RuntimeException( "There is already a query interface with this unique name" );
+            throw new GenericRuntimeException( "There is already a query interface with this unique name" );
         }
         QueryInterface instance;
-        int ifaceId = -1;
+        QueryInterfaceTemplate template = Catalog.snapshot().getInterfaceTemplate( interfaceType ).orElseThrow();
         try {
-            Class<?> clazz = Class.forName( clazzName );
-            Constructor<?> ctor = clazz.getConstructor( TransactionManager.class, Authenticator.class, int.class, String.class, Map.class );
-            ifaceId = catalog.addQueryInterface( uniqueName, clazzName, settings );
-            instance = (QueryInterface) ctor.newInstance( transactionManager, authenticator, ifaceId, uniqueName, settings );
-
-            Thread thread = new Thread( instance );
-            thread.start();
-
-            try {
-                thread.join();
-            } catch ( InterruptedException e ) {
-                log.warn( "Interrupted on join()", e );
-            }
-
-            interfaceByName.put( instance.getUniqueName(), instance );
-            interfaceById.put( instance.getQueryInterfaceId(), instance );
-            interfaceThreadById.put( instance.getQueryInterfaceId(), thread );
-        } catch ( InvocationTargetException e ) {
-            if ( ifaceId != -1 ) {
-                catalog.deleteQueryInterface( ifaceId );
-            }
-            throw new RuntimeException( "Something went wrong while adding a new query interface: " + e.getCause().getMessage(), e );
-        } catch ( ClassNotFoundException | NoSuchMethodException | IllegalAccessException | InstantiationException e ) {
-            if ( ifaceId != -1 ) {
-                catalog.deleteQueryInterface( ifaceId );
-            }
-            throw new RuntimeException( "Something went wrong while adding a new query interface!", e );
+            instance = template.deployer().get( transactionManager, authenticator, uniqueName, settings );
+        } catch ( GenericRuntimeException e ) {
+            throw new GenericRuntimeException( "Failed to deploy query interface: " + e.getMessage() );
         }
+        startInterface( instance, interfaceType, null );
+
         return instance;
     }
 
 
-    public void removeQueryInterface( Catalog catalog, String uniqueName ) throws UnknownQueryInterfaceException {
+    public void removeQueryInterface( Catalog catalog, String uniqueName ) {
         uniqueName = uniqueName.toLowerCase();
         if ( !interfaceByName.containsKey( uniqueName ) ) {
-            throw new RuntimeException( "Unknown query interface: " + uniqueName );
+            throw new GenericRuntimeException( "Unknown query interface: " + uniqueName );
         }
-        CatalogQueryInterface catalogQueryInterface = catalog.getQueryInterface( uniqueName );
+        LogicalQueryInterface logicalQueryInterface = catalog.getSnapshot().getQueryInterface( uniqueName ).orElseThrow();
 
         // Shutdown interface
         interfaceByName.get( uniqueName ).shutdown();
 
         // Remove interfaces from maps
-        interfaceById.remove( catalogQueryInterface.id );
+        interfaceById.remove( logicalQueryInterface.id );
         interfaceByName.remove( uniqueName );
-        interfaceThreadById.remove( catalogQueryInterface.id );
+        interfaceThreadById.remove( logicalQueryInterface.id );
 
         // Delete query interface from catalog
-        catalog.deleteQueryInterface( catalogQueryInterface.id );
-    }
-
-
-    @AllArgsConstructor
-    public static class QueryInterfaceInformation {
-
-        public final String name;
-        public final String description;
-        public final Class clazz;
-        public final List<QueryInterfaceSetting> availableSettings;
-
-
-        public static String toJson( QueryInterfaceInformation[] queryInterfaceInformations ) {
-            JsonSerializer<QueryInterfaceInformation> queryInterfaceInformationSerializer = ( src, typeOfSrc, context ) -> {
-                JsonObject jsonStore = new JsonObject();
-                jsonStore.addProperty( "name", src.name );
-                jsonStore.addProperty( "description", src.description );
-                jsonStore.addProperty( "clazz", src.clazz.getCanonicalName() );
-                jsonStore.add( "availableSettings", context.serialize( src.availableSettings ) );
-                return jsonStore;
-            };
-            Gson qiiGson = new GsonBuilder().registerTypeAdapter( QueryInterfaceInformation.class, queryInterfaceInformationSerializer ).create();
-            return qiiGson.toJson( queryInterfaceInformations, QueryInterfaceInformation[].class );
-        }
-
+        catalog.dropQueryInterface( logicalQueryInterface.id );
     }
 
 
     /**
      * Model needed for the UI
      */
-    public static class QueryInterfaceInformationRequest {
+    public record QueryInterfaceCreateRequest(
+            @JsonSerialize String interfaceType,
+            @JsonSerialize String uniqueName,
+            @JsonSerialize Map<String, String> settings ) {
 
-        public String clazzName;
-        public String uniqueName;
-        public Map<String, String> currentSettings;
+    }
+
+
+    public record QueryInterfaceTemplate(
+            @JsonSerialize String interfaceType,
+            @JsonSerialize String description,
+            Function5<TransactionManager, Authenticator, String, Map<String, String>, QueryInterface> deployer,
+            @JsonSerialize List<QueryInterfaceSetting> availableSettings ) {
+
+        public Map<String, String> getDefaultSettings() {
+            Map<String, String> m = new HashMap<>();
+            availableSettings.forEach( ( s ) -> m.put( s.name, s.getDefault() ) );
+            return m;
+        }
+
+    }
+
+
+    @FunctionalInterface
+    public interface Function5<P1, P2, P3, P4, R> {
+
+        R get( P1 p1, P2 p2, P3 p3, P4 p4 );
 
     }
 

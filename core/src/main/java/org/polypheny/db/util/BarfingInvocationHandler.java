@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,8 +43,6 @@ import java.lang.reflect.UndeclaredThrowableException;
  * A class derived from <code>BarfingInvocationHandler</code> handles a method call by looking for a method in itself with identical parameters. If no such method is found, it throws {@link UnsupportedOperationException}.
  *
  * It is useful when you are prototyping code. You can rapidly create a prototype class which implements the important methods in an interface, then implement other methods as they are called.
- *
- * @see DelegatingInvocationHandler
  */
 public class BarfingInvocationHandler implements InvocationHandler {
 
@@ -90,5 +88,5 @@ public class BarfingInvocationHandler implements InvocationHandler {
         String signature = method.getReturnType().getName() + " " + method.getDeclaringClass().getName() + "." + method.getName() + "(" + buf.toString() + ")";
         return new UnsupportedOperationException( signature );
     }
-}
 
+}

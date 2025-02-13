@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2025 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,19 +24,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.Getter;
 import org.polypheny.db.adapter.DataContext;
-import org.polypheny.db.adapter.DataContext.SlimDataContext;
+import org.polypheny.db.catalog.Catalog;
 import org.polypheny.db.config.RuntimeConfig;
 import org.polypheny.db.information.InformationDuration;
 import org.polypheny.db.information.InformationGroup;
 import org.polypheny.db.information.InformationManager;
 import org.polypheny.db.information.InformationPage;
-import org.polypheny.db.jdbc.ContextImpl;
+import org.polypheny.db.monitoring.events.StatementEvent;
+import org.polypheny.db.prepare.ContextImpl;
 import org.polypheny.db.processing.DataContextImpl;
 import org.polypheny.db.processing.QueryProcessor;
 import org.polypheny.db.processing.QueryProviderImpl;
 import org.polypheny.db.processing.VolcanoQueryProcessor;
-import org.polypheny.db.router.RouterManager;
-import org.polypheny.db.routing.Router;
+import org.polypheny.db.type.entity.numerical.PolyLong;
 import org.polypheny.db.util.FileInputHandle;
 
 public class StatementImpl implements Statement {
@@ -45,23 +45,24 @@ public class StatementImpl implements Statement {
 
     @Getter
     private final long id;
-
     @Getter
-    private final TransactionImpl transaction;
-
-    private QueryProcessor queryProcessor;
-
-    private DataContext dataContext = null;
-    private ContextImpl prepareContext = null;
+    private final Transaction transaction;
     private final List<FileInputHandle> fileInputHandles = new ArrayList<>();
 
-    private InformationDuration duration;
+    private QueryProcessor queryProcessor;
+    private DataContext dataContext;
+    private ContextImpl prepareContext;
+    private InformationDuration processingDuration;
+    private InformationDuration routingDuration;
+    private InformationDuration overviewDuration;
+    private InformationPage executionTimePage;
+
+    private StatementEvent statementEvent;
 
 
-    StatementImpl( TransactionImpl transaction ) {
+    StatementImpl( Transaction transaction ) {
         this.id = STATEMENT_COUNTER.getAndIncrement();
         this.transaction = transaction;
-        this.duration = null;
     }
 
 
@@ -81,16 +82,18 @@ public class StatementImpl implements Statement {
             // Avoid overflow
             int queryTimeout = RuntimeConfig.QUERY_TIMEOUT.getInteger();
             if ( queryTimeout > 0 && queryTimeout < Integer.MAX_VALUE / 1000 ) {
-                map.put( DataContext.Variable.TIMEOUT.camelName, queryTimeout * 1000L );
+                map.put( DataContext.Variable.TIMEOUT.camelName, PolyLong.of( queryTimeout * 1000L ) );
             }
 
             final AtomicBoolean cancelFlag;
             cancelFlag = transaction.getCancelFlag();
             map.put( DataContext.Variable.CANCEL_FLAG.camelName, cancelFlag );
-            if ( RuntimeConfig.SPARK_ENGINE.getBoolean() ) {
-                return new SlimDataContext();
-            }
-            dataContext = new DataContextImpl( new QueryProviderImpl(), map, transaction.getSchema(), transaction.getTypeFactory(), this );
+            dataContext = new DataContextImpl(
+                    new QueryProviderImpl(),
+                    map,
+                    transaction.getSnapshot(),
+                    transaction.getTypeFactory(),
+                    this );
         }
         return dataContext;
     }
@@ -100,11 +103,9 @@ public class StatementImpl implements Statement {
     public ContextImpl getPrepareContext() {
         if ( prepareContext == null ) {
             prepareContext = new ContextImpl(
-                    transaction.getSchema(),
+                    transaction.getSnapshot(),
                     getDataContext(),
-                    transaction.getDefaultSchema().name,
-                    transaction.getDatabase().id,
-                    transaction.getUser().id,
+                    transaction.getDefaultNamespace() == null ? Catalog.DEFAULT_NAMESPACE_NAME : transaction.getDefaultNamespace().name,
                     this );
         }
         return prepareContext;
@@ -112,23 +113,63 @@ public class StatementImpl implements Statement {
 
 
     @Override
-    public InformationDuration getDuration() {
-        if ( duration == null ) {
-            InformationManager im = transaction.getQueryAnalyzer();
-            InformationPage executionTimePage = new InformationPage( "Execution time", "Query execution time" );
-            im.addPage( executionTimePage );
-            InformationGroup group = new InformationGroup( executionTimePage, "Processing" );
-            im.addGroup( group );
-            duration = new InformationDuration( group );
-            im.registerInformation( duration );
+    public InformationDuration getProcessingDuration() {
+        if ( processingDuration == null ) {
+            processingDuration = initDuration( "Query Processing", 2 );
         }
-        return duration;
+        return processingDuration;
     }
 
 
     @Override
-    public Router getRouter() {
-        return RouterManager.getInstance().getRouter();
+    public InformationDuration getRoutingDuration() {
+        if ( routingDuration == null ) {
+            routingDuration = initDuration( "Query Routing", 3 );
+        }
+        return routingDuration;
+    }
+
+
+    @Override
+    public InformationDuration getOverviewDuration() {
+        if ( overviewDuration == null ) {
+            overviewDuration = initDuration( "Overview", 1 );
+        }
+        return overviewDuration;
+    }
+
+
+    @Override
+    public StatementEvent getMonitoringEvent() {
+        return this.statementEvent;
+    }
+
+
+    @Override
+    public long getIndex() {
+        return id;
+    }
+
+
+    @Override
+    public void setMonitoringEvent( StatementEvent event ) {
+        this.statementEvent = event;
+    }
+
+
+    private InformationDuration initDuration( String title, int order ) {
+        InformationManager im = transaction.getQueryAnalyzer();
+        if ( executionTimePage == null ) {
+            executionTimePage = new InformationPage( "Execution Time", "Query processing & execution time" );
+            executionTimePage.setStmtLabel( id );
+            im.addPage( executionTimePage );
+        }
+        InformationGroup group = new InformationGroup( executionTimePage, title );
+        group.setOrder( order );
+        im.addGroup( group );
+        InformationDuration duration = new InformationDuration( group );
+        im.registerInformation( duration );
+        return duration;
     }
 
 
@@ -139,7 +180,6 @@ public class StatementImpl implements Statement {
             dataContext.getParameterValues().clear();
         }
         fileInputHandles.forEach( FileInputHandle::close );
-        dataContext = null;
     }
 
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,18 +40,18 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.rel.type.RelDataTypePrecedenceList;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.algebra.type.AlgDataTypePrecedenceList;
 import org.polypheny.db.util.Glossary;
 import org.polypheny.db.util.ImmutableNullableList;
 import org.polypheny.db.util.Util;
 
 
 /**
- * SqlTypeExplicitPrecedenceList implements the {@link RelDataTypePrecedenceList} interface via an explicit
+ * SqlTypeExplicitPrecedenceList implements the {@link AlgDataTypePrecedenceList} interface via an explicit
  * list of {@link PolyType} entries.
  */
-public class PolyTypeExplicitPrecedenceList implements RelDataTypePrecedenceList {
+public class PolyTypeExplicitPrecedenceList implements AlgDataTypePrecedenceList {
 
     // NOTE: The null entries delimit equivalence classes
     private static final List<PolyType> NUMERIC_TYPES =
@@ -96,19 +96,7 @@ public class PolyTypeExplicitPrecedenceList implements RelDataTypePrecedenceList
                     .put( PolyType.DATE, list( PolyType.DATE ) )
                     .put( PolyType.TIME, list( PolyType.TIME ) )
                     .put( PolyType.TIMESTAMP, list( PolyType.TIMESTAMP, PolyType.DATE, PolyType.TIME ) )
-                    .put( PolyType.INTERVAL_YEAR, list( PolyType.YEAR_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_YEAR_MONTH, list( PolyType.YEAR_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_MONTH, list( PolyType.YEAR_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_DAY, list( PolyType.DAY_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_DAY_HOUR, list( PolyType.DAY_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_DAY_MINUTE, list( PolyType.DAY_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_DAY_SECOND, list( PolyType.DAY_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_HOUR, list( PolyType.DAY_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_HOUR_MINUTE, list( PolyType.DAY_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_HOUR_SECOND, list( PolyType.DAY_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_MINUTE, list( PolyType.DAY_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_MINUTE_SECOND, list( PolyType.DAY_INTERVAL_TYPES ) )
-                    .put( PolyType.INTERVAL_SECOND, list( PolyType.DAY_INTERVAL_TYPES ) )
+                    .put( PolyType.INTERVAL, list( PolyType.INTERVAL_TYPES ) )
                     .build();
 
 
@@ -138,7 +126,7 @@ public class PolyTypeExplicitPrecedenceList implements RelDataTypePrecedenceList
 
     // implement RelDataTypePrecedenceList
     @Override
-    public boolean containsType( RelDataType type ) {
+    public boolean containsType( AlgDataType type ) {
         PolyType typeName = type.getPolyType();
         return typeName != null && typeNames.contains( typeName );
     }
@@ -146,7 +134,7 @@ public class PolyTypeExplicitPrecedenceList implements RelDataTypePrecedenceList
 
     // implement RelDataTypePrecedenceList
     @Override
-    public int compareTypePrecedence( RelDataType type1, RelDataType type2 ) {
+    public int compareTypePrecedence( AlgDataType type1, AlgDataType type2 ) {
         assert containsType( type1 ) : type1;
         assert containsType( type2 ) : type2;
 
@@ -170,12 +158,12 @@ public class PolyTypeExplicitPrecedenceList implements RelDataTypePrecedenceList
     }
 
 
-    static RelDataTypePrecedenceList getListForType( RelDataType type ) {
+    static AlgDataTypePrecedenceList getListForType( AlgDataType type ) {
         PolyType typeName = type.getPolyType();
         if ( typeName == null ) {
             return null;
         }
         return TYPE_NAME_TO_PRECEDENCE_LIST.get( typeName );
     }
-}
 
+}

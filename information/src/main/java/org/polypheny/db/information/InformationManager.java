@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2025 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,15 +17,12 @@
 package org.polypheny.db.information;
 
 
-import com.google.gson.Gson;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.jetty.websocket.api.Session;
@@ -43,13 +40,13 @@ public class InformationManager {
     /**
      * Map of instances.
      */
-    private static ConcurrentMap<String, InformationManager> instances = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<String, InformationManager> instances = new ConcurrentHashMap<>();
 
     private final ConcurrentMap<String, Information> informationMap = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, InformationGroup> groups = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, InformationPage> pages = new ConcurrentHashMap<>();
 
-    private ConcurrentLinkedQueue<InformationObserver> observers = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<InformationObserver> observers = new ConcurrentLinkedQueue<>();
 
     /**
      * WebsocketConnection for notifications
@@ -82,18 +79,17 @@ public class InformationManager {
                     runningInstancesGroup,
                     Arrays.asList( "ID", "Pages", "Groups", "Elements", "Observers" ) );
             this.registerInformation( runningInstancesTable );
-            ScheduledExecutorService exec = Executors.newSingleThreadScheduledExecutor();
-            exec.scheduleAtFixedRate( () -> {
+            page.setRefreshFunction( () -> {
                 runningInstancesTable.reset();
                 instances.forEach( ( k, v ) -> runningInstancesTable.addRow( k.substring( 0, Math.min( k.length(), 8 ) ), v.pages.size(), v.groups.size(), v.informationMap.size(), v.observers.size() ) );
-            }, 0, 30, TimeUnit.SECONDS );
+            } );
         }
     }
 
 
     /**
      * Singleton.
-     * Without a id the main Information Manager is returned.
+     * Without an id the main Information Manager is returned.
      */
     public static InformationManager getInstance() {
         return getInstance( MAIN_MANAGER_IDENTIFIER );
@@ -147,7 +143,7 @@ public class InformationManager {
 
 
     /**
-     * Deregister a information page.
+     * Deregister an information page.
      *
      * @param page Page tp remove
      */
@@ -190,6 +186,7 @@ public class InformationManager {
         for ( InformationGroup g : groups ) {
             if ( this.groups.containsKey( g.getId() ) ) {
                 this.groups.remove( g.getId() );
+                getPage( g.getPageId() ).removeGroup( g );
             } else {
                 log.warn( "Trying to remove a information group which is not registered in this information manager." );
             }
@@ -216,7 +213,8 @@ public class InformationManager {
      */
     public void removeInformation( final Information... infos ) {
         for ( Information i : infos ) {
-            this.informationMap.remove( i.getId(), i );
+            this.informationMap.remove( i.getId() );
+            getGroup( i.getGroup() ).removeInformation( i );
         }
     }
 
@@ -250,8 +248,17 @@ public class InformationManager {
             counter++;
         }
         Arrays.sort( pages1, Comparator.comparing( InformationPage::getName ) );
-        Gson gson = new Gson();
-        return gson.toJson( pages1, InformationPage[].class );
+
+        try {
+            return Information.mapper.writeValueAsString( pages1 );
+        } catch ( JsonProcessingException e ) {
+            return null;
+        }
+    }
+
+
+    public Information[] getInformationArray() {
+        return this.informationMap.values().toArray( new Information[0] );
     }
 
 
@@ -305,8 +312,9 @@ public class InformationManager {
      * Send an updated information object as JSON via Websocket to the WebUI
      */
     public void notify( final Information i ) {
+        String info = i.asJson();
         for ( InformationObserver observer : this.observers ) {
-            observer.observeInfos( i, instanceId, session );
+            observer.observeInfos( info, instanceId, session );
         }
     }
 
@@ -317,5 +325,14 @@ public class InformationManager {
         }
     }
 
+
+    public void attachStacktrace( Throwable e ) {
+        InformationPage exceptionPage = new InformationPage( "Stacktrace" ).fullWidth();
+        InformationGroup exceptionGroup = new InformationGroup( exceptionPage.getId(), "Stacktrace" );
+        InformationStacktrace exceptionElement = new InformationStacktrace( e, exceptionGroup );
+        this.addPage( exceptionPage );
+        this.addGroup( exceptionGroup );
+        this.registerInformation( exceptionElement );
+    }
 
 }

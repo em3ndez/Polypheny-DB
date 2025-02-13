@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,21 +17,22 @@
 package org.polypheny.db.adapter;
 
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonSerializer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import lombok.AllArgsConstructor;
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.pf4j.ExtensionPoint;
 import org.polypheny.db.catalog.Catalog;
-import org.polypheny.db.catalog.entity.CatalogColumn;
-import org.polypheny.db.catalog.entity.CatalogColumnPlacement;
-import org.polypheny.db.catalog.entity.CatalogIndex;
-import org.polypheny.db.catalog.entity.CatalogTable;
-import org.polypheny.db.jdbc.Context;
-import org.polypheny.db.type.PolyType;
+import org.polypheny.db.catalog.catalogs.AdapterCatalog;
+import org.polypheny.db.catalog.entity.LogicalAdapter.AdapterType;
+import org.polypheny.db.catalog.entity.logical.LogicalTable;
 
-
-public abstract class DataStore extends Adapter {
+@Slf4j
+public abstract class DataStore<S extends AdapterCatalog> extends Adapter<S> implements Modifiable, ExtensionPoint {
 
     @Getter
     private final boolean persistent;
@@ -39,59 +40,58 @@ public abstract class DataStore extends Adapter {
     protected final transient Catalog catalog = Catalog.getInstance();
 
 
-    public DataStore( final int adapterId, final String uniqueName, final Map<String, String> settings, final boolean persistent ) {
-        super( adapterId, uniqueName, settings );
+    public DataStore( final long adapterId, final String uniqueName, final Map<String, String> settings, final DeployMode mode, final boolean persistent, S storeCatalog ) {
+        super( adapterId, uniqueName, settings, mode, storeCatalog );
         this.persistent = persistent;
 
         informationPage.setLabel( "Stores" );
     }
 
 
-    public abstract void createTable( Context context, CatalogTable combinedTable );
+    public abstract List<IndexMethodModel> getAvailableIndexMethods();
 
-    public abstract void dropTable( Context context, CatalogTable combinedTable );
+    public abstract IndexMethodModel getDefaultIndexMethod();
 
-    public abstract void addColumn( Context context, CatalogTable catalogTable, CatalogColumn catalogColumn );
-
-    public abstract void dropColumn( Context context, CatalogColumnPlacement columnPlacement );
-
-    public abstract void addIndex( Context context, CatalogIndex catalogIndex );
-
-    public abstract void dropIndex( Context context, CatalogIndex catalogIndex );
-
-    public abstract void updateColumnType( Context context, CatalogColumnPlacement columnPlacement, CatalogColumn catalogColumn, PolyType oldType );
-
-    public abstract List<AvailableIndexMethod> getAvailableIndexMethods();
-
-    public abstract AvailableIndexMethod getDefaultIndexMethod();
-
-    public abstract List<FunctionalIndexInfo> getFunctionalIndexes( CatalogTable catalogTable );
+    public abstract List<FunctionalIndexInfo> getFunctionalIndexes( LogicalTable catalogTable );
 
 
-    @AllArgsConstructor
-    public static class AvailableIndexMethod {
-
-        public final String name;
-        public final String displayName;
+    public record IndexMethodModel( @JsonProperty String name, @JsonProperty String displayName ) {
 
     }
 
 
-    @AllArgsConstructor
-    public static class FunctionalIndexInfo {
-
-        public final List<Long> columnIds;
-        public final String methodDisplayName;
-
+    public record FunctionalIndexInfo( List<Long> columnIds, String methodDisplayName ) {
 
         public List<String> getColumnNames() {
             List<String> columnNames = new ArrayList<>( columnIds.size() );
             for ( long columnId : columnIds ) {
-                columnNames.add( Catalog.getInstance().getColumn( columnId ).name );
+                columnNames.add( Catalog.snapshot().rel().getColumn( columnId ).orElseThrow().name );
             }
             return columnNames;
         }
 
+    }
+
+
+    public static JsonSerializer<DataStore<?>> getSerializer() {
+        //see https://futurestud.io/tutorials/gson-advanced-custom-serialization-part-1
+        return ( src, typeOfSrc, context ) -> {
+            JsonObject jsonStore = new JsonObject();
+            jsonStore.addProperty( "adapterId", src.getAdapterId() );
+            jsonStore.add( "adapterSettings", context.serialize( AbstractAdapterSetting.serializeSettings( src.getAvailableSettings( src.getClass() ), src.getCurrentSettings() ) ) );
+            jsonStore.add( "settings", context.serialize( src.getCurrentSettings() ) );
+            jsonStore.addProperty( "adapterName", src.getAdapterName() );
+            jsonStore.addProperty( "uniqueName", src.getUniqueName() );
+            jsonStore.addProperty( "type", src.getAdapterType().name() );
+            jsonStore.add( "persistent", context.serialize( src.isPersistent() ) );
+            jsonStore.add( "availableIndexMethods", context.serialize( src.getAvailableIndexMethods() ) );
+            return jsonStore;
+        };
+    }
+
+
+    private AdapterType getAdapterType() {
+        return AdapterType.STORE;
     }
 
 }

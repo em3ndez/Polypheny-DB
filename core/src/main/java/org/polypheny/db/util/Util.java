@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,16 +34,17 @@
 package org.polypheny.db.util;
 
 
+import com.google.common.base.Charsets;
 import com.google.common.base.Throwables;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
-import com.google.common.collect.Collections2;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Sets;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -66,44 +67,45 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.AbstractCollection;
 import java.util.AbstractList;
-import java.util.AbstractMap;
-import java.util.AbstractSet;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collection;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Hashtable;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Properties;
 import java.util.RandomAccess;
 import java.util.Set;
 import java.util.StringTokenizer;
 import java.util.TimeZone;
-import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collector;
 import javax.annotation.Nonnull;
-import org.apache.calcite.avatica.util.DateTimeUtils;
-import org.apache.calcite.avatica.util.Spaces;
 import org.apache.calcite.linq4j.Ord;
-import org.polypheny.db.sql.SqlAggFunction;
-import org.polypheny.db.sql.SqlCall;
-import org.polypheny.db.sql.SqlKind;
-import org.polypheny.db.sql.SqlLiteral;
-import org.polypheny.db.sql.SqlNode;
-import org.polypheny.db.sql.SqlValuesOperator;
-import org.polypheny.db.sql.fun.SqlRowOperator;
-import org.polypheny.db.sql.util.SqlBasicVisitor;
+import org.jetbrains.annotations.NotNull;
+import org.polypheny.db.algebra.AlgCollation;
+import org.polypheny.db.algebra.AlgFieldCollation;
+import org.polypheny.db.algebra.AlgNode;
+import org.polypheny.db.algebra.constant.Kind;
+import org.polypheny.db.algebra.constant.Monotonicity;
+import org.polypheny.db.algebra.fun.AggFunction;
+import org.polypheny.db.catalog.entity.Entity;
+import org.polypheny.db.catalog.exceptions.GenericRuntimeException;
+import org.polypheny.db.catalog.logistic.DataModel;
+import org.polypheny.db.nodes.BasicNodeVisitor;
+import org.polypheny.db.nodes.Call;
+import org.polypheny.db.nodes.Literal;
+import org.polypheny.db.nodes.Node;
+import org.polypheny.db.nodes.RowOperator;
+import org.polypheny.db.nodes.ValuesOperator;
+import org.polypheny.db.util.temporal.DateTimeUtils;
 import org.slf4j.Logger;
 
 
@@ -118,7 +120,7 @@ public class Util {
 
     /**
      * System-dependent newline character.
-     *
+     * <p>
      * In general, you should not use this in expected results of tests.
      * Expected results should be the expected result on Linux (or Mac OS) using '\n'. Apply {@link Util#toLinux(String)} to Windows actual results, if
      * necessary, to make them look like Linux actual.
@@ -140,7 +142,7 @@ public class Util {
      */
     private static final Pattern JAVA_ID_PATTERN = Pattern.compile( "[a-zA-Z_$][a-zA-Z0-9$]*" );
 
-    private static final Charset DEFAULT_CHARSET = Charset.forName( SaffronProperties.INSTANCE.defaultCharset().get() );
+    private static final Charset DEFAULT_CHARSET = Charsets.UTF_8;//Charset.forName( SaffronProperties.INSTANCE.defaultCharset().get() );
 
     /**
      * Maps classes to the map of their enum values. Uses a weak map so that classes are not prevented from being unloaded.
@@ -158,29 +160,29 @@ public class Util {
      * @param call the expression to evaluate
      * @return Whether it is ensured that the call produces a single value
      */
-    public static boolean isSingleValue( SqlCall call ) {
-        if ( call.getOperator() instanceof SqlAggFunction ) {
+    public static boolean isSingleValue( Call call ) {
+        if ( call.getOperator() instanceof AggFunction ) {
             return true;
-        } else if ( call.getOperator() instanceof SqlValuesOperator || call.getOperator() instanceof SqlRowOperator ) {
-            List<SqlNode> operands = call.getOperandList();
+        } else if ( call.getOperator() instanceof ValuesOperator || call.getOperator() instanceof RowOperator ) {
+            List<Node> operands = call.getOperandList();
             if ( operands.size() == 1 ) {
-                SqlNode operand = operands.get( 0 );
-                if ( operand instanceof SqlLiteral ) {
+                Node operand = operands.get( 0 );
+                if ( operand instanceof Literal ) {
                     return true;
-                } else if ( operand instanceof SqlCall ) {
-                    return isSingleValue( (SqlCall) operand );
+                } else if ( operand instanceof Call ) {
+                    return isSingleValue( (Call) operand );
                 }
             }
 
             return false;
         } else {
             boolean isScalar = true;
-            for ( SqlNode operand : call.getOperandList() ) {
-                if ( operand instanceof SqlLiteral ) {
+            for ( Node operand : call.getOperandList() ) {
+                if ( operand instanceof Literal ) {
                     continue;
                 }
 
-                if ( !(operand instanceof SqlCall) || !Util.isSingleValue( (SqlCall) operand ) ) {
+                if ( !(operand instanceof Call) || !Util.isSingleValue( (Call) operand ) ) {
                     isScalar = false;
                     break;
                 }
@@ -307,7 +309,7 @@ public class Util {
             pw.print( "null" );
             return;
         }
-        Class clazz = o.getClass();
+        Class<?> clazz = o.getClass();
         if ( o instanceof String ) {
             printJavaString( pw, (String) o, true );
         } else if (
@@ -320,7 +322,7 @@ public class Util {
                         || (clazz == Float.class)
                         || (clazz == Double.class)
                         || (clazz == Void.class) ) {
-            pw.print( o.toString() );
+            pw.print( o );
         } else if ( clazz.isArray() ) {
             // o is an array, but we can't cast to Object[] because it may be an array of primitives.
             Object[] a; // for debug
@@ -342,9 +344,8 @@ public class Util {
                 print( pw, Array.get( o, i ), indent + 1 );
             }
             pw.print( "}" );
-        } else if ( o instanceof Iterator ) {
+        } else if ( o instanceof Iterator iter ) {
             pw.print( clazz.getName() );
-            Iterator iter = (Iterator) o;
             pw.print( " {" );
             int i = 0;
             while ( iter.hasNext() ) {
@@ -354,9 +355,8 @@ public class Util {
                 print( pw, iter.next(), indent + 1 );
             }
             pw.print( "}" );
-        } else if ( o instanceof Enumeration ) {
+        } else if ( o instanceof Enumeration e ) {
             pw.print( clazz.getName() );
-            Enumeration e = (Enumeration) o;
             pw.print( " {" );
             int i = 0;
             while ( e.hasMoreElements() ) {
@@ -389,7 +389,7 @@ public class Util {
                 try {
                     val = field.get( o );
                 } catch ( IllegalAccessException e ) {
-                    throw new RuntimeException( e );
+                    throw new GenericRuntimeException( e );
                 }
                 print( pw, val, indent + 1 );
             }
@@ -508,33 +508,17 @@ public class Util {
 
 
     /**
-     * Converts double-quoted Java strings to their contents.
-     * For example, <code>"foo\"bar"</code> becomes <code>foo"bar</code>.
-     */
-    public static String stripDoubleQuotes( String value ) {
-        assert value.charAt( 0 ) == '"';
-        assert value.charAt( value.length() - 1 ) == '"';
-        String s5 = value.substring( 1, value.length() - 1 );
-        String s4 = Util.replace( s5, "\\r", "\r" );
-        String s3 = Util.replace( s4, "\\n", "\n" );
-        String s2 = Util.replace( s3, "\\\"", "\"" );
-        String s1 = Util.replace( s2, "\\\\", "\\" );
-        return s1;
-    }
-
-
-    /**
      * Converts an arbitrary string into a string suitable for use as a Java identifier.
-     *
+     * <p>
      * The mapping is one-to-one (that is, distinct strings will produce distinct java identifiers). The mapping is also reversible,
      * but the inverse mapping is not implemented.
-     *
+     * <p>
      * A valid Java identifier must start with a Unicode letter, underscore, or dollar sign ($). The other characters, if any,
      * can be a Unicode letter, underscore, dollar sign, or digit.
-     *
+     * <p>
      * This method uses an algorithm similar to URL encoding. Valid characters are unchanged; invalid characters are converted to an
      * underscore followed by the hex code of the character; and underscores are doubled.
-     *
+     * <p>
      * Examples:
      *
      * <ul>
@@ -577,31 +561,6 @@ public class Util {
     }
 
 
-    /**
-     * Returns true when input string is a valid Java identifier.
-     *
-     * @param s input string
-     * @return true when input string is a valid Java identifier
-     */
-    public static boolean isValidJavaIdentifier( String s ) {
-        if ( s.isEmpty() ) {
-            return false;
-        }
-        if ( !Character.isJavaIdentifierStart( s.codePointAt( 0 ) ) ) {
-            return false;
-        }
-        int i = 0;
-        while ( i < s.length() ) {
-            int codePoint = s.codePointAt( i );
-            if ( !Character.isJavaIdentifierPart( codePoint ) ) {
-                return false;
-            }
-            i += Character.charCount( codePoint );
-        }
-        return true;
-    }
-
-
     public static String toLinux( String s ) {
         return s.replaceAll( "\r\n", "\n" );
     }
@@ -611,44 +570,15 @@ public class Util {
      * @return true if s==null or if s.length()==0
      */
     public static boolean isNullOrEmpty( String s ) {
-        return (null == s) || (s.length() == 0);
-    }
-
-
-    /**
-     * Converts a list of a string, with commas between elements.
-     *
-     * For example,
-     * <code>commaList(Arrays.asList({"a", "b"}))</code>
-     * returns "a, b".
-     *
-     * @param list List
-     * @return String representation of string
-     */
-    public static <T> String commaList( List<T> list ) {
-        return sepList( list, ", " );
+        return (null == s) || (s.isEmpty());
     }
 
 
     /**
      * Converts a list of a string, with a given separator between elements.
      */
-    public static <T> String sepList( List<T> list, String sep ) {
-        final int max = list.size() - 1;
-        switch ( max ) {
-            case -1:
-                return "";
-            case 0:
-                return list.get( 0 ).toString();
-        }
-        final StringBuilder buf = new StringBuilder();
-        for ( int i = 0; ; i++ ) {
-            buf.append( list.get( i ) );
-            if ( i == max ) {
-                return buf.toString();
-            }
-            buf.append( sep );
-        }
+    public static <T> String sepList( List<T> list, CharSequence sep ) {
+        return String.join( sep, list.stream().map( Object::toString ).toList() );
     }
 
 
@@ -668,7 +598,6 @@ public class Util {
      * which was introduced in Guava 20, but we don't require Guava version 20 yet.
      */
     public static void throwIfUnchecked( Throwable throwable ) {
-        Bug.upgrade( "Remove when minimum Guava version is 20" );
         Objects.requireNonNull( throwable );
         if ( throwable instanceof RuntimeException ) {
             throw (RuntimeException) throwable;
@@ -681,10 +610,10 @@ public class Util {
 
     /**
      * Returns a {@link java.lang.RuntimeException} indicating that a particular feature has not been implemented, but should be.
-     *
+     * <p>
      * If every 'hole' in our functionality uses this method, it will be easier for us to identity the holes. Throwing a
      * {@link java.lang.UnsupportedOperationException} isn't as good, because sometimes we actually want to partially implement an API.
-     *
+     * <p>
      * Example usage:
      *
      * <blockquote>
@@ -703,67 +632,9 @@ public class Util {
     public static RuntimeException needToImplement( Object o ) {
         String description = null;
         if ( o != null ) {
-            description = o.getClass().toString() + ": " + o.toString();
+            description = o.getClass() + ": " + o;
         }
         throw new UnsupportedOperationException( description );
-    }
-
-
-    /**
-     * Flags a piece of code as needing to be cleaned up before you check in.
-     *
-     * Introduce a call to this method to indicate that a piece of code, or a javadoc comment, needs work before you check in. If you have an IDE which
-     * can easily trace references, this is an easy way to maintain a to-do list.
-     *
-     * <strong>Checked-in code must never call this method</strong>: you must remove all calls/references to this method before you check in.
-     *
-     * The <code>argument</code> has generic type and determines the type of the result. This allows you to use the method inside an expression,
-     * for example
-     *
-     * <blockquote>
-     * <pre><code>int x = Util.deprecated(0, false);</code></pre>
-     * </blockquote>
-     *
-     * but the usual usage is to pass in a descriptive string.
-     *
-     * <h3>Examples</h3>
-     *
-     * <h4>Example #1: Using <code>deprecated</code> to fail if a piece of
-     * supposedly dead code is reached</h4>
-     *
-     * <blockquote>
-     * <pre><code>void foo(int x) {
-     *     if (x &lt; 0) {
-     *         // If this code is executed, an error will be thrown.
-     *         Util.deprecated(
-     *             "no longer need to handle negative numbers", true);
-     *         bar(x);
-     *     } else {
-     *         baz(x);
-     *     }
-     * }</code></pre>
-     * </blockquote>
-     *
-     * <h4>Example #2: Using <code>deprecated</code> to comment out dead
-     * code</h4>
-     *
-     * <blockquote>
-     * <pre>if (Util.deprecated(false, false)) {
-     *     // This code will not be executed, but an error will not be thrown.
-     *     baz();
-     * }</pre>
-     * </blockquote>
-     *
-     * @param argument Arbitrary argument to the method.
-     * @param fail Whether to throw an exception if this method is called
-     * @return The value of the <code>argument</code>.
-     * @deprecated If a piece of code calls this method, it indicates that the code needs to be cleaned up.
-     */
-    public static <T> T deprecated( T argument, boolean fail ) {
-        if ( fail ) {
-            throw new UnsupportedOperationException();
-        }
-        return argument;
     }
 
 
@@ -814,7 +685,7 @@ public class Util {
      * Converts a string into tokens.
      */
     public static Iterable<String> tokenize( final String s, final String delim ) {
-        return new Iterable<String>() {
+        return new Iterable<>() {
             final StringTokenizer t = new StringTokenizer( s, delim );
 
 
@@ -833,10 +704,6 @@ public class Util {
                     }
 
 
-                    @Override
-                    public void remove() {
-                        throw new UnsupportedOperationException( "remove" );
-                    }
                 };
             }
         };
@@ -845,12 +712,12 @@ public class Util {
 
     /**
      * Converts a Java timezone to POSIX format, so that the boost C++ library can instantiate timezone objects.
-     *
+     * <p>
      * <a href="http://www.opengroup.org/onlinepubs/000095399/basedefs/xbd_chap08.html">POSIX IEEE 1003.1</a> defines a format for timezone specifications.
-     *
+     * <p>
      * The boost C++ library can read these specifications and instantiate <a href="http://www.boost.org/doc/html/date_time/local_time.html#date_time.local_time.posix_time_zone"> posix_time_zone</a>
      * objects from them. The purpose of this method, therefore, is to allow the C++ code such as the fennel calculator to use the same notion of timezone as Java code.
-     *
+     * <p>
      * The format is as follows:
      *
      * <blockquote>"std offset dst [offset],start[/time],end[/time]"</blockquote>
@@ -884,7 +751,7 @@ public class Util {
      * </ul>
      *
      * (Real format strings do not contain spaces; they are in the above template only for readability.)
-     *
+     * <p>
      * Boost apparently diverges from the POSIX standard in how it treats the sign of timezone offsets. The POSIX standard states '<i>If preceded by a
      * '-', the timezone shall be east of the Prime Meridian; otherwise, it shall be west</i>', yet boost requires the opposite. For instance, PST
      * has offset '-8' above. This method generates timezone strings consistent with boost's expectations.
@@ -998,22 +865,13 @@ public class Util {
             case 3: // SimpleTimeZone.DOW_GE_DOM_MODE
 
                 // If the day is 1, 8, 15, 22, we can translate this to case 2.
-                switch ( day ) {
-                    case 1:
-                        week = 1; // 1st week of month
-                        break;
-                    case 8:
-                        week = 2; // 2nd week of month
-                        break;
-                    case 15:
-                        week = 3; // 3rd week of month
-                        break;
-                    case 22:
-                        week = 4; // 4th week of month
-                        break;
-                    default:
-                        throw new AssertionError( "POSIX timezone format cannot represent " + tz );
-                }
+                week = switch ( day ) {
+                    case 1 -> 1; // 1st week of month
+                    case 8 -> 2; // 2nd week of month
+                    case 15 -> 3; // 3rd week of month
+                    case 22 -> 4; // 4th week of month
+                    default -> throw new AssertionError( "POSIX timezone format cannot represent " + tz );
+                };
                 // fall through
 
             case 2: // SimpleTimeZone.DOW_IN_MONTH_MODE
@@ -1095,7 +953,7 @@ public class Util {
 
     /**
      * Parses a locale string.
-     *
+     * <p>
      * The inverse operation of {@link java.util.Locale#toString()}.
      *
      * @param localeString Locale string, e.g. "en" or "en_US"
@@ -1103,25 +961,21 @@ public class Util {
      */
     public static Locale parseLocale( String localeString ) {
         String[] strings = localeString.split( "_" );
-        switch ( strings.length ) {
-            case 1:
-                return new Locale( strings[0] );
-            case 2:
-                return new Locale( strings[0], strings[1] );
-            case 3:
-                return new Locale( strings[0], strings[1], strings[2] );
-            default:
-                throw new AssertionError( "bad locale string '" + localeString + "'" );
-        }
+        return switch ( strings.length ) {
+            case 1 -> new Locale( strings[0] );
+            case 2 -> new Locale( strings[0], strings[1] );
+            case 3 -> new Locale( strings[0], strings[1], strings[2] );
+            default -> throw new AssertionError( "bad locale string '" + localeString + "'" );
+        };
     }
 
 
     /**
      * Converts a list whose members are automatically down-cast to a given type.
-     *
+     * <p>
      * If a member of the backing list is not an instanceof <code>E</code>, the accessing method (such as {@link List#get}) will
      * throw a {@link ClassCastException}.
-     *
+     * <p>
      * All modifications are automatically written to the backing list. Not synchronized.
      *
      * @param list Backing list.
@@ -1135,9 +989,9 @@ public class Util {
 
     /**
      * Converts a iterator whose members are automatically down-cast to a given type.
-     *
+     * <p>
      * If a member of the backing iterator is not an instanceof <code>E</code>, {@link Iterator#next()}) will throw a {@link ClassCastException}.
-     *
+     * <p>
      * All modifications are automatically written to the backing iterator.
      * Not synchronized.
      *
@@ -1169,7 +1023,7 @@ public class Util {
 
     /**
      * Converts an {@link Iterable} whose members are automatically down-cast to a given type.
-     *
+     * <p>
      * All modifications are automatically written to the backing iterator.
      * Not synchronized.
      *
@@ -1184,7 +1038,7 @@ public class Util {
 
     /**
      * Makes a collection of untyped elements appear as a list of strictly typed elements, by filtering out those which are not of the correct type.
-     *
+     * <p>
      * The returned object is an {@link Iterable}, which makes it ideal for use with the 'foreach' construct. For example,
      *
      * <blockquote><code>List&lt;Number&gt; numbers = Arrays.asList(1, 2, 3.14,
@@ -1204,12 +1058,12 @@ public class Util {
 
 
     public static <E> Collection<E> filter( final Collection<?> collection, final Class<E> includeFilter ) {
-        return new AbstractCollection<E>() {
+        return new AbstractCollection<>() {
             private int size = -1;
 
 
             @Override
-            public Iterator<E> iterator() {
+            public @NotNull Iterator<E> iterator() {
                 return new Filterator<>( collection.iterator(), includeFilter );
             }
 
@@ -1234,7 +1088,7 @@ public class Util {
 
     /**
      * Returns a subset of a list containing only elements of a given type.
-     *
+     * <p>
      * Modifications to the list are NOT written back to the source list.
      *
      * @param list List of objects
@@ -1249,58 +1103,6 @@ public class Util {
             }
         }
         return result;
-    }
-
-
-    /**
-     * Converts a {@link Properties} object to a <code>{@link Map}&lt;String, String&gt;</code>.
-     *
-     * This is necessary because {@link Properties} is a dinosaur class. It ought to extend <code>Map&lt;String,String&gt;</code>,
-     * but instead extends <code>{@link Hashtable}&lt;Object,Object&gt;</code>.
-     *
-     * Typical usage, to iterate over a {@link Properties}:
-     *
-     * <blockquote>
-     * <code>
-     * Properties properties;<br>
-     * for (Map.Entry&lt;String, String&gt; entry =
-     * Util.toMap(properties).entrySet()) {<br>
-     * println("key=" + entry.getKey() + ", value=" + entry.getValue());<br>
-     * }
-     * </code>
-     * </blockquote>
-     */
-    public static Map<String, String> toMap( final Properties properties ) {
-        //noinspection unchecked
-        return (Map) properties;
-    }
-
-
-    /**
-     * Returns a hashmap with given contents.
-     *
-     * Use this method in initializers. Type parameters are inferred from context, and the contents are initialized declaratively. For example,
-     *
-     * <blockquote><code>Map&lt;String, Integer&gt; population =<br>
-     * &nbsp;&nbsp;Olap4jUtil.mapOf(<br>
-     * &nbsp;&nbsp;&nbsp;&nbsp;"UK", 65000000,<br>
-     * &nbsp;&nbsp;&nbsp;&nbsp;"USA", 300000000);</code></blockquote>
-     *
-     * @param key First key
-     * @param value First value
-     * @param keyValues Second and sequent key/value pairs
-     * @param <K> Key type
-     * @param <V> Value type
-     * @return Map with given contents
-     */
-    public static <K, V> Map<K, V> mapOf( K key, V value, Object... keyValues ) {
-        final Map<K, V> map = new LinkedHashMap<>( 1 + keyValues.length );
-        map.put( key, value );
-        for ( int i = 0; i < keyValues.length; ) {
-            //noinspection unchecked
-            map.put( (K) keyValues[i++], (V) keyValues[i++] );
-        }
-        return map;
     }
 
 
@@ -1336,7 +1138,7 @@ public class Util {
 
     /**
      * Returns the value of an enumeration with a particular name.
-     *
+     * <p>
      * Similar to {@link Enum#valueOf(Class, String)}, but returns {@code null} rather than throwing {@link IllegalArgumentException}.
      *
      * @param clazz Enum class
@@ -1369,9 +1171,9 @@ public class Util {
 
     /**
      * Creates a list that returns every {@code n}th element of a list, starting at element {@code k}.
-     *
+     * <p>
      * It is OK if the list is empty or its size is not a multiple of {@code n}.
-     *
+     * <p>
      * For instance, {@code quotientList(list, 2, 0)} returns the even elements of a list, and {@code quotientList(list, 2, 1)} returns the odd
      * elements. Those lists are the same length only if list has even size.
      */
@@ -1402,16 +1204,16 @@ public class Util {
      * [ (e<sub>0</sub>, e<sub>1</sub>),
      * (e<sub>2</sub>, e<sub>3</sub>), ... ].
      */
-    public static <E> List<Pair<E, E>> pairs( final List<E> list ) {
+    public static <E extends Comparable<E>> List<Pair<E, E>> pairs( final List<E> list ) {
         return Pair.zip( quotientList( list, 2, 0 ), quotientList( list, 2, 1 ) );
     }
 
 
     /**
      * Returns the first value if it is not null, otherwise the second value.
-     *
+     * <p>
      * The result may be null.
-     *
+     * <p>
      * Equivalent to the Elvis operator ({@code ?:}) of languages such as Groovy or PHP.
      */
     public static <T> T first( T v0, T v1 ) {
@@ -1580,7 +1382,7 @@ public class Util {
 
     /**
      * Returns the ordinal of the first element in the list which is equal to a previous element in the list.
-     *
+     * <p>
      * For example,
      * <code>firstDuplicate(Arrays.asList("a", "b", "c", "b", "a"))</code>
      * returns 3, the ordinal of the 2nd "b".
@@ -1620,9 +1422,9 @@ public class Util {
 
     /**
      * Converts a list into a list with unique elements.
-     *
+     * <p>
      * The order is preserved; the second and subsequent occurrences are removed.
-     *
+     * <p>
      * If the list is already unique it is returned unchanged.
      */
     public static <E> List<E> distinctList( List<E> list ) {
@@ -1635,9 +1437,9 @@ public class Util {
 
     /**
      * Converts an iterable into a list with unique elements.
-     *
+     * <p>
      * The order is preserved; the second and subsequent occurrences are removed.
-     *
+     * <p>
      * If {@code iterable} is a unique list it is returned unchanged.
      */
     public static <E> List<E> distinctList( Iterable<E> keys ) {
@@ -1772,7 +1574,7 @@ public class Util {
 
     /**
      * Converts a number into human-readable form, with 3 digits and a "K", "M" or "G" multiplier for thousands, millions or billions.
-     *
+     * <p>
      * Examples: -2, 0, 1, 999, 1.00K, 1.99K, 3.45M, 4.56B.
      */
     public static String human( double d ) {
@@ -1783,74 +1585,22 @@ public class Util {
             return "-" + human( -d );
         }
         final int digitCount = (int) Math.floor( Math.log10( d ) );
-        switch ( digitCount ) {
-            case 0:
-            case 1:
-            case 2:
-                return Integer.toString( (int) d );
-            case 3:
-            case 4:
-            case 5:
-                return digits3( Math.round( d / 10D ), digitCount % 3 ) + "K";
-            case 6:
-            case 7:
-            case 8:
-                return digits3( Math.round( d / 10000D ), digitCount % 3 ) + "M";
-            case 9:
-            case 10:
-            case 11:
-                return digits3( Math.round( d / 10000000D ), digitCount % 3 ) + "G";
-            default:
-                return Double.toString( d );
-        }
+        return switch ( digitCount ) {
+            case 0, 1, 2 -> Integer.toString( (int) d );
+            case 3, 4, 5 -> digits3( Math.round( d / 10D ), digitCount % 3 ) + "K";
+            case 6, 7, 8 -> digits3( Math.round( d / 10000D ), digitCount % 3 ) + "M";
+            case 9, 10, 11 -> digits3( Math.round( d / 10000000D ), digitCount % 3 ) + "G";
+            default -> Double.toString( d );
+        };
     }
 
 
     private static String digits3( long x, int z ) {
         final String s = Long.toString( x );
-        switch ( z ) {
-            case 0:
-                return s.charAt( 0 ) + "." + s.substring( 1, 3 );
-            case 1:
-                return s.substring( 0, 2 ) + "." + s.substring( 2, 3 );
-            default:
-                return s.substring( 0, 3 );
-        }
-    }
-
-
-    /**
-     * Returns a map that is a view onto a collection of values, using the provided function to convert a value to a key.
-     *
-     * Unlike {@link com.google.common.collect.Maps#uniqueIndex(Iterable, com.google.common.base.Function)},
-     * returns a view whose contents change as the collection of values changes.
-     *
-     * @param values Collection of values
-     * @param function Function to map value to key
-     * @param <K> Key type
-     * @param <V> Value type
-     * @return Map that is a view onto the values
-     */
-    public static <K, V> Map<K, V> asIndexMapJ( final Collection<V> values, final Function<V, K> function ) {
-        final Collection<Map.Entry<K, V>> entries = Collections2.transform( values, v -> Pair.of( function.apply( v ), v ) );
-        final Set<Map.Entry<K, V>> entrySet =
-                new AbstractSet<Map.Entry<K, V>>() {
-                    @Override
-                    public Iterator<Map.Entry<K, V>> iterator() {
-                        return entries.iterator();
-                    }
-
-
-                    @Override
-                    public int size() {
-                        return entries.size();
-                    }
-                };
-        return new AbstractMap<K, V>() {
-            @Override
-            public Set<Entry<K, V>> entrySet() {
-                return entrySet;
-            }
+        return switch ( z ) {
+            case 0 -> s.charAt( 0 ) + "." + s.substring( 1, 3 );
+            case 1 -> s.substring( 0, 2 ) + "." + s.substring( 2, 3 );
+            default -> s.substring( 0, 3 );
         };
     }
 
@@ -1865,13 +1615,7 @@ public class Util {
         try {
             String line;
             for ( int i = 1; (line = br.readLine()) != null; i++ ) {
-                out.print( "/*" );
-                String number = Integer.toString( i );
-                if ( number.length() < 4 ) {
-                    Spaces.append( out, 4 - number.length() );
-                }
-                out.print( number );
-                out.print( " */ " );
+                out.printf( "/*%-4d */", i );
                 out.println( line );
             }
         } catch ( IOException e ) {
@@ -1882,7 +1626,7 @@ public class Util {
 
     /**
      * Returns the value of a system property as a boolean.
-     *
+     * <p>
      * For example, the property "foo" is considered true if you supply {@code -Dfoo} or {@code -Dfoo=true} or {@code -Dfoo=TRUE},
      * false if you omit the flag or supply {@code -Dfoo=false}.
      *
@@ -1902,7 +1646,7 @@ public class Util {
         if ( v == null ) {
             return defaultValue;
         }
-        return "".equals( v ) || "true".equalsIgnoreCase( v );
+        return v.isEmpty() || "true".equalsIgnoreCase( v );
     }
 
 
@@ -1931,7 +1675,7 @@ public class Util {
 
     /**
      * Creates a {@link PrintWriter} to a given output stream using UTF-8 character set.
-     *
+     * <p>
      * Does not use the default character set.
      */
     public static PrintWriter printWriter( OutputStream out ) {
@@ -1941,7 +1685,7 @@ public class Util {
 
     /**
      * Creates a {@link PrintWriter} to a given file using UTF-8 character set.
-     *
+     * <p>
      * Does not use the default character set.
      */
     public static PrintWriter printWriter( File file ) throws FileNotFoundException {
@@ -1951,7 +1695,7 @@ public class Util {
 
     /**
      * Creates a {@link BufferedReader} to a given input stream using UTF-8 character set.
-     *
+     * <p>
      * Does not use the default character set.
      */
     public static BufferedReader reader( InputStream in ) {
@@ -1961,7 +1705,7 @@ public class Util {
 
     /**
      * Creates a {@link BufferedReader} to read a given file using UTF-8 character set.
-     *
+     * <p>
      * Does not use the default character set.
      */
     public static BufferedReader reader( File file ) throws FileNotFoundException {
@@ -1990,8 +1734,6 @@ public class Util {
 
     /**
      * Returns a {@code Collector} that accumulates the input elements into a Guava {@code ImmutableList} via a {@code ImmutableList.Builder}.
-     *
-     * It will be obsolete when we move to {@link Bug#upgrade Guava 21.0}, which has {@code ImmutableList.toImmutableList()}.
      *
      * @param <T> Type of the input elements
      * @return a {@code Collector} that collects all the input elements into an {@link ImmutableList}, in encounter order
@@ -2065,6 +1807,16 @@ public class Util {
     }
 
 
+    public static void closeNoThrow( Closeable c ) {
+        if ( c != null ) {
+            try {
+                c.close();
+            } catch ( IOException ignore ) {
+            }
+        }
+    }
+
+
     /**
      * Filters an iterator.
      */
@@ -2072,6 +1824,31 @@ public class Util {
         return new FilteringIterator<>( iterator, predicate );
     }
 
+
+    public static Monotonicity getMonotonicity( Entity entity, String columnName ) {
+        if ( entity.dataModel != DataModel.RELATIONAL ) {
+            return Monotonicity.NOT_MONOTONIC;
+        }
+
+        for ( AlgCollation collation : entity.getCollations() ) {
+            final AlgFieldCollation fieldCollation = collation.getFieldCollations().get( 0 );
+            final int fieldIndex = fieldCollation.getFieldIndex();
+            if ( fieldIndex < entity.getTupleType().getFieldCount() && entity.getTupleType().getFieldNames().get( fieldIndex ).equals( columnName ) ) {
+                return fieldCollation.direction.monotonicity();
+            }
+        }
+        return Monotonicity.NOT_MONOTONIC;
+    }
+
+
+    public static Collation getDefaultCollation() {
+        return Collation.COERCIBLE;
+    }
+
+
+    public static boolean containsEntity( AlgNode a ) {
+        return a.containsEntity();
+    }
 
 
     /**
@@ -2095,24 +1872,26 @@ public class Util {
         public Object getNode() {
             return node;
         }
+
     }
 
 
     /**
-     * Visitor which looks for an OVER clause inside a tree of {@link SqlNode} objects.
+     * Visitor which looks for an OVER clause inside a tree of {@link Node} objects.
      */
-    public static class OverFinder extends SqlBasicVisitor<Void> {
+    public static class OverFinder extends BasicNodeVisitor<Void> {
 
         public static final OverFinder INSTANCE = new Util.OverFinder();
 
 
         @Override
-        public Void visit( SqlCall call ) {
-            if ( call.getKind() == SqlKind.OVER ) {
+        public Void visit( Call call ) {
+            if ( call.getKind() == Kind.OVER ) {
                 throw FoundOne.NULL;
             }
             return super.visit( call );
         }
+
     }
 
 
@@ -2151,6 +1930,7 @@ public class Util {
         public Iterator<T> iterator() {
             return listIterator();
         }
+
     }
 
 
@@ -2165,6 +1945,7 @@ public class Util {
         RandomAccessTransformingList( List<F> list, java.util.function.Function<F, T> function ) {
             super( list, function );
         }
+
     }
 
 
@@ -2211,6 +1992,7 @@ public class Util {
             }
             return (T) DUMMY;
         }
-    }
-}
 
+    }
+
+}

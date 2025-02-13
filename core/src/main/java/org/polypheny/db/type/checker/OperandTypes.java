@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,17 +20,16 @@ package org.polypheny.db.type.checker;
 import static org.polypheny.db.util.Static.RESOURCE;
 
 import com.google.common.collect.ImmutableList;
-import java.io.Serializable;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.function.Predicate;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.rel.type.RelDataTypeComparability;
-import org.polypheny.db.sql.SqlCallBinding;
-import org.polypheny.db.sql.SqlLiteral;
-import org.polypheny.db.sql.SqlNode;
-import org.polypheny.db.sql.SqlOperator;
-import org.polypheny.db.sql.SqlUtil;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.algebra.type.AlgDataTypeComparability;
+import org.polypheny.db.nodes.CallBinding;
+import org.polypheny.db.nodes.IntervalQualifier;
+import org.polypheny.db.nodes.Literal;
+import org.polypheny.db.nodes.Node;
+import org.polypheny.db.nodes.Operator;
 import org.polypheny.db.type.OperandCountRange;
 import org.polypheny.db.type.PolyOperandCountRanges;
 import org.polypheny.db.type.PolyType;
@@ -38,6 +37,7 @@ import org.polypheny.db.type.PolyTypeFamily;
 import org.polypheny.db.type.PolyTypeUtil;
 import org.polypheny.db.type.inference.InferTypes;
 import org.polypheny.db.type.inference.ReturnTypes;
+import org.polypheny.db.util.CoreUtil;
 
 
 /**
@@ -54,7 +54,7 @@ import org.polypheny.db.type.inference.ReturnTypes;
  * @see ReturnTypes
  * @see InferTypes
  */
-public abstract class OperandTypes implements Serializable {
+public abstract class OperandTypes {
 
     private OperandTypes() {
     }
@@ -64,9 +64,9 @@ public abstract class OperandTypes implements Serializable {
      * Operand type-checking strategy type must be a positive integer non-NULL literal.
      */
     public static final PolySingleOperandTypeChecker POSITIVE_INTEGER_LITERAL =
-            new FamilyOperandTypeChecker( ImmutableList.of( PolyTypeFamily.INTEGER ), (Predicate<Integer> & Serializable) i -> false ) {
+            new FamilyOperandTypeChecker( ImmutableList.of( PolyTypeFamily.INTEGER ), i -> false ) {
                 @Override
-                public boolean checkSingleOperandType( SqlCallBinding callBinding, SqlNode node, int iFormalOperand, boolean throwOnFailure ) {
+                public boolean checkSingleOperandType( CallBinding callBinding, Node node, int iFormalOperand, boolean throwOnFailure ) {
                     if ( !LITERAL.checkSingleOperandType( callBinding, node, iFormalOperand, throwOnFailure ) ) {
                         return false;
                     }
@@ -75,8 +75,8 @@ public abstract class OperandTypes implements Serializable {
                         return false;
                     }
 
-                    final SqlLiteral arg = (SqlLiteral) node;
-                    final BigDecimal value = (BigDecimal) arg.getValue();
+                    final Literal arg = (Literal) node;
+                    final BigDecimal value = arg.getValue().asNumber().BigDecimalValue();
                     if ( value.compareTo( BigDecimal.ZERO ) < 0 || hasFractionalPart( value ) ) {
                         if ( throwOnFailure ) {
                             throw callBinding.newError( RESOURCE.argumentMustBePositiveInteger( callBinding.getOperator().getName() ) );
@@ -117,7 +117,60 @@ public abstract class OperandTypes implements Serializable {
      * Creates a checker that passes if each operand is a member of a corresponding family.
      */
     public static FamilyOperandTypeChecker family( PolyTypeFamily... families ) {
-        return new FamilyOperandTypeChecker( ImmutableList.copyOf( families ), (Predicate<Integer> & Serializable) i -> false );
+        return new FamilyOperandTypeChecker( ImmutableList.copyOf( families ), i -> false );
+    }
+
+
+    public static PolyOperandTypeChecker INTERVAL_CONTAINS() {
+        return new PolyOperandTypeChecker() {
+            @Override
+            public boolean checkOperandTypes( CallBinding callBinding, boolean throwOnFailure ) {
+                if ( callBinding.getOperandCount() != 2 ) {
+                    return false;
+                }
+
+                Node unit = callBinding.operands().get( 0 );
+
+                AlgDataType type = callBinding.getOperandType( 1 );
+
+                if ( !(unit instanceof IntervalQualifier qualifier) ) {
+                    return true;
+                }
+                if ( false ) {
+                    if ( throwOnFailure ) {
+                        throw callBinding.newValidationSignatureError();
+                    }
+                    return false;
+                }
+                return true;
+
+            }
+
+
+            @Override
+            public OperandCountRange getOperandCountRange() {
+                return PolyOperandCountRanges.of( 1 );
+            }
+
+
+            @Override
+            public String getAllowedSignatures( Operator op, String opName ) {
+                return null;
+            }
+
+
+            @Override
+            public Consistency getConsistency() {
+                return null;
+            }
+
+
+            @Override
+            public boolean isOptional( int i ) {
+                return false;
+            }
+        };
+
     }
 
 
@@ -213,7 +266,7 @@ public abstract class OperandTypes implements Serializable {
     public static PolyOperandTypeChecker variadic( final OperandCountRange range ) {
         return new PolyOperandTypeChecker() {
             @Override
-            public boolean checkOperandTypes( SqlCallBinding callBinding, boolean throwOnFailure ) {
+            public boolean checkOperandTypes( CallBinding callBinding, boolean throwOnFailure ) {
                 return range.isValidCount( callBinding.getOperandCount() );
             }
 
@@ -225,7 +278,7 @@ public abstract class OperandTypes implements Serializable {
 
 
             @Override
-            public String getAllowedSignatures( SqlOperator op, String opName ) {
+            public String getAllowedSignatures( Operator op, String opName ) {
                 return opName + "(...)";
             }
 
@@ -266,6 +319,8 @@ public abstract class OperandTypes implements Serializable {
 
     public static final PolySingleOperandTypeChecker STRING = family( PolyTypeFamily.STRING );
 
+    public static final PolySingleOperandTypeChecker JSON = or( family( PolyTypeFamily.DOCUMENT ), family( PolyTypeFamily.STRING ) );
+
     public static final FamilyOperandTypeChecker STRING_STRING = family( PolyTypeFamily.STRING, PolyTypeFamily.STRING );
 
     public static final FamilyOperandTypeChecker STRING_STRING_STRING = family( PolyTypeFamily.STRING, PolyTypeFamily.STRING, PolyTypeFamily.STRING );
@@ -285,6 +340,12 @@ public abstract class OperandTypes implements Serializable {
     public static final PolySingleOperandTypeChecker MULTISET = family( PolyTypeFamily.MULTISET );
 
     public static final PolySingleOperandTypeChecker ARRAY = family( PolyTypeFamily.ARRAY );
+
+    public static final PolySingleOperandTypeChecker GEOMETRY = family( PolyTypeFamily.GEO );
+    public static final PolySingleOperandTypeChecker GEOMETRY_GEOMETRY = family( PolyTypeFamily.GEO, PolyTypeFamily.GEO );
+    public static final PolySingleOperandTypeChecker GEOMETRY_INTEGER = family( PolyTypeFamily.GEO, PolyTypeFamily.INTEGER );
+    public static final PolySingleOperandTypeChecker GEOMETRY_GEOMETRY_STRING = family( PolyTypeFamily.GEO, PolyTypeFamily.GEO, PolyTypeFamily.STRING );
+    public static final PolySingleOperandTypeChecker GEOMETRY_GEOMETRY_NUMERIC = family( PolyTypeFamily.GEO, PolyTypeFamily.GEO, PolyTypeFamily.NUMERIC );
 
     /**
      * Checks that returns whether a value is a multiset or an array. Cf Java, where list and set are collections but a map is not.
@@ -308,7 +369,7 @@ public abstract class OperandTypes implements Serializable {
      * Creates a checker that passes if each operand is a member of a corresponding family.
      */
     public static FamilyOperandTypeChecker family( List<PolyTypeFamily> families ) {
-        return family( families, (Predicate<Integer> & Serializable) i -> false );
+        return family( families, i -> false );
     }
 
 
@@ -335,7 +396,7 @@ public abstract class OperandTypes implements Serializable {
     public static final PolyOperandTypeChecker COMPARABLE_ORDERED_COMPARABLE_ORDERED =
             new ComparableOperandTypeChecker(
                     2,
-                    RelDataTypeComparability.ALL,
+                    AlgDataTypeComparability.ALL,
                     PolyOperandTypeChecker.Consistency.COMPARE );
 
     /**
@@ -344,7 +405,7 @@ public abstract class OperandTypes implements Serializable {
     public static final PolyOperandTypeChecker COMPARABLE_ORDERED =
             new ComparableOperandTypeChecker(
                     1,
-                    RelDataTypeComparability.ALL,
+                    AlgDataTypeComparability.ALL,
                     PolyOperandTypeChecker.Consistency.NONE );
 
     /**
@@ -353,7 +414,7 @@ public abstract class OperandTypes implements Serializable {
     public static final PolyOperandTypeChecker COMPARABLE_UNORDERED_COMPARABLE_UNORDERED =
             new ComparableOperandTypeChecker(
                     2,
-                    RelDataTypeComparability.UNORDERED,
+                    AlgDataTypeComparability.UNORDERED,
                     PolyOperandTypeChecker.Consistency.LEAST_RESTRICTIVE );
 
     /**
@@ -418,9 +479,9 @@ public abstract class OperandTypes implements Serializable {
     public static final PolySingleOperandTypeChecker MINUS_OPERATOR = OperandTypes.or( NUMERIC_NUMERIC, INTERVAL_SAME_SAME, DATETIME_INTERVAL );  // TODO: compatibility check
 
     public static final FamilyOperandTypeChecker MINUS_DATE_OPERATOR =
-            new FamilyOperandTypeChecker( ImmutableList.of( PolyTypeFamily.DATETIME, PolyTypeFamily.DATETIME, PolyTypeFamily.DATETIME_INTERVAL ), (Predicate<Integer> & Serializable) i -> false ) {
+            new FamilyOperandTypeChecker( ImmutableList.of( PolyTypeFamily.DATETIME, PolyTypeFamily.DATETIME, PolyTypeFamily.DATETIME_INTERVAL ), i -> false ) {
                 @Override
-                public boolean checkOperandTypes( SqlCallBinding callBinding, boolean throwOnFailure ) {
+                public boolean checkOperandTypes( CallBinding callBinding, boolean throwOnFailure ) {
                     if ( !super.checkOperandTypes( callBinding, throwOnFailure ) ) {
                         return false;
                     }
@@ -440,16 +501,16 @@ public abstract class OperandTypes implements Serializable {
     public static final PolySingleOperandTypeChecker RECORD_COLLECTION =
             new PolySingleOperandTypeChecker() {
                 @Override
-                public boolean checkSingleOperandType( SqlCallBinding callBinding, SqlNode node, int iFormalOperand, boolean throwOnFailure ) {
+                public boolean checkSingleOperandType( CallBinding callBinding, Node node, int iFormalOperand, boolean throwOnFailure ) {
                     assert 0 == iFormalOperand;
-                    RelDataType type = callBinding.getValidator().deriveType( callBinding.getScope(), node );
+                    AlgDataType type = callBinding.getValidator().deriveType( callBinding.getScope(), node );
                     boolean validationError = false;
                     if ( !type.isStruct() ) {
                         validationError = true;
-                    } else if ( type.getFieldList().size() != 1 ) {
+                    } else if ( type.getFields().size() != 1 ) {
                         validationError = true;
                     } else {
-                        PolyType typeName = type.getFieldList().get( 0 ).getType().getPolyType();
+                        PolyType typeName = type.getFields().get( 0 ).getType().getPolyType();
                         if ( typeName != PolyType.MULTISET && typeName != PolyType.ARRAY ) {
                             validationError = true;
                         }
@@ -463,7 +524,7 @@ public abstract class OperandTypes implements Serializable {
 
 
                 @Override
-                public boolean checkOperandTypes( SqlCallBinding callBinding, boolean throwOnFailure ) {
+                public boolean checkOperandTypes( CallBinding callBinding, boolean throwOnFailure ) {
                     return checkSingleOperandType(
                             callBinding,
                             callBinding.operand( 0 ),
@@ -479,7 +540,7 @@ public abstract class OperandTypes implements Serializable {
 
 
                 @Override
-                public String getAllowedSignatures( SqlOperator op, String opName ) {
+                public String getAllowedSignatures( Operator op, String opName ) {
                     return "UNNEST(<MULTISET>)";
                 }
 
@@ -513,13 +574,13 @@ public abstract class OperandTypes implements Serializable {
     public static final PolyOperandTypeChecker RECORD_TO_SCALAR =
             new PolySingleOperandTypeChecker() {
                 @Override
-                public boolean checkSingleOperandType( SqlCallBinding callBinding, SqlNode node, int iFormalOperand, boolean throwOnFailure ) {
+                public boolean checkSingleOperandType( CallBinding callBinding, Node node, int iFormalOperand, boolean throwOnFailure ) {
                     assert 0 == iFormalOperand;
-                    RelDataType type = callBinding.getValidator().deriveType( callBinding.getScope(), node );
+                    AlgDataType type = callBinding.getValidator().deriveType( callBinding.getScope(), node );
                     boolean validationError = false;
                     if ( !type.isStruct() ) {
                         validationError = true;
-                    } else if ( type.getFieldList().size() != 1 ) {
+                    } else if ( type.getFields().size() != 1 ) {
                         validationError = true;
                     }
 
@@ -531,7 +592,7 @@ public abstract class OperandTypes implements Serializable {
 
 
                 @Override
-                public boolean checkOperandTypes( SqlCallBinding callBinding, boolean throwOnFailure ) {
+                public boolean checkOperandTypes( CallBinding callBinding, boolean throwOnFailure ) {
                     return checkSingleOperandType(
                             callBinding,
                             callBinding.operand( 0 ),
@@ -547,8 +608,8 @@ public abstract class OperandTypes implements Serializable {
 
 
                 @Override
-                public String getAllowedSignatures( SqlOperator op, String opName ) {
-                    return SqlUtil.getAliasedSignature( op, opName, ImmutableList.of( "RECORDTYPE(SINGLE FIELD)" ) );
+                public String getAllowedSignatures( Operator op, String opName ) {
+                    return CoreUtil.getAliasedSignature( op, opName, ImmutableList.of( "RECORDTYPE(SINGLE FIELD)" ) );
                 }
 
 
@@ -572,16 +633,16 @@ public abstract class OperandTypes implements Serializable {
      * [ROW] (DATETIME, DATETIME)
      * [ROW] (DATETIME, INTERVAL)
      */
-    private static class PeriodOperandTypeChecker implements PolySingleOperandTypeChecker, Serializable {
+    private static class PeriodOperandTypeChecker implements PolySingleOperandTypeChecker {
 
         @Override
-        public boolean checkSingleOperandType( SqlCallBinding callBinding, SqlNode node, int iFormalOperand, boolean throwOnFailure ) {
+        public boolean checkSingleOperandType( CallBinding callBinding, Node node, int iFormalOperand, boolean throwOnFailure ) {
             assert 0 == iFormalOperand;
-            RelDataType type = callBinding.getValidator().deriveType( callBinding.getScope(), node );
+            AlgDataType type = callBinding.getValidator().deriveType( callBinding.getScope(), node );
             boolean valid = false;
-            if ( type.isStruct() && type.getFieldList().size() == 2 ) {
-                final RelDataType t0 = type.getFieldList().get( 0 ).getType();
-                final RelDataType t1 = type.getFieldList().get( 1 ).getType();
+            if ( type.isStruct() && type.getFields().size() == 2 ) {
+                final AlgDataType t0 = type.getFields().get( 0 ).getType();
+                final AlgDataType t1 = type.getFields().get( 1 ).getType();
                 if ( PolyTypeUtil.isDatetime( t0 ) ) {
                     if ( PolyTypeUtil.isDatetime( t1 ) ) {
                         // t0 must be comparable with t1; (DATE, TIMESTAMP) is not valid
@@ -602,7 +663,7 @@ public abstract class OperandTypes implements Serializable {
 
 
         @Override
-        public boolean checkOperandTypes( SqlCallBinding callBinding, boolean throwOnFailure ) {
+        public boolean checkOperandTypes( CallBinding callBinding, boolean throwOnFailure ) {
             return checkSingleOperandType( callBinding, callBinding.operand( 0 ), 0, throwOnFailure );
         }
 
@@ -614,8 +675,8 @@ public abstract class OperandTypes implements Serializable {
 
 
         @Override
-        public String getAllowedSignatures( SqlOperator op, String opName ) {
-            return SqlUtil.getAliasedSignature( op, opName, ImmutableList.of( "PERIOD (DATETIME, INTERVAL)", "PERIOD (DATETIME, DATETIME)" ) );
+        public String getAllowedSignatures( Operator op, String opName ) {
+            return CoreUtil.getAliasedSignature( op, opName, ImmutableList.of( "PERIOD (DATETIME, INTERVAL)", "PERIOD (DATETIME, DATETIME)" ) );
         }
 
 

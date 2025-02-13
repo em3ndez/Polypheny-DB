@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2025 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,49 +40,40 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
-import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
-import java.text.SimpleDateFormat;
-import java.time.LocalDateTime;
-import java.util.AbstractList;
 import java.util.Calendar;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.TimeZone;
-import org.apache.calcite.avatica.util.ByteString;
-import org.apache.calcite.avatica.util.DateTimeUtils;
-import org.apache.calcite.avatica.util.TimeUnit;
-import org.polypheny.db.rel.RelNode;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.sql.SqlCollation;
-import org.polypheny.db.sql.SqlKind;
-import org.polypheny.db.sql.SqlOperator;
-import org.polypheny.db.sql.fun.SqlStdOperatorTable;
-import org.polypheny.db.sql.parser.SqlParserUtil;
+import java.util.stream.Collectors;
+import lombok.Getter;
+import lombok.Value;
+import org.polypheny.db.algebra.AlgNode;
+import org.polypheny.db.algebra.constant.Kind;
+import org.polypheny.db.algebra.operators.OperatorName;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.nodes.Operator;
 import org.polypheny.db.type.PolyType;
-import org.polypheny.db.util.CompositeList;
-import org.polypheny.db.util.ConversionUtil;
-import org.polypheny.db.util.DateString;
-import org.polypheny.db.util.Litmus;
+import org.polypheny.db.type.entity.PolyString;
+import org.polypheny.db.type.entity.PolyValue;
+import org.polypheny.db.type.entity.category.PolyNumber;
+import org.polypheny.db.type.entity.numerical.PolyBigDecimal;
+import org.polypheny.db.util.Collation;
 import org.polypheny.db.util.NlsString;
 import org.polypheny.db.util.Pair;
-import org.polypheny.db.util.SaffronProperties;
-import org.polypheny.db.util.TimeString;
 import org.polypheny.db.util.TimestampString;
 import org.polypheny.db.util.Unsafe;
 import org.polypheny.db.util.Util;
+import org.polypheny.db.util.temporal.TimeUnit;
 
 
 /**
  * Constant value in a row-expression.
- *
+ * <p>
  * There are several methods for creating literals in {@link RexBuilder}: {@link RexBuilder#makeLiteral(boolean)} and so forth.
- *
+ * <p>
  * How is the value stored? In that respect, the class is somewhat of a black box. There is a {@link #getValue} method which returns the value as an object, but the type of that value is implementation detail,
- * and it is best that your code does not depend upon that knowledge. It is better to use task-oriented methods such as {@link #getValue2} and {@link #toJavaString}.
- *
+ * and it is best that your code does not depend upon that knowledge. It is better to use task-oriented methods such as {@link #getValue} and {@link #toJavaString}.
+ * <p>
  * The allowable types and combinations are:
  *
  * <table>
@@ -128,21 +119,12 @@ import org.polypheny.db.util.Util;
  * <td>{@link TimestampString}; also {@link Calendar} (UTC time zone) and {@link Long} (milliseconds since POSIX epoch)</td>
  * </tr>
  * <tr>
- * <td>{@link PolyType#INTERVAL_DAY},
- * {@link PolyType#INTERVAL_DAY_HOUR},
- * {@link PolyType#INTERVAL_DAY_MINUTE},
- * {@link PolyType#INTERVAL_DAY_SECOND},
- * {@link PolyType#INTERVAL_HOUR},
- * {@link PolyType#INTERVAL_HOUR_MINUTE},
- * {@link PolyType#INTERVAL_HOUR_SECOND},
- * {@link PolyType#INTERVAL_MINUTE},
- * {@link PolyType#INTERVAL_MINUTE_SECOND},
- * {@link PolyType#INTERVAL_SECOND}</td>
+ * <td>{@link PolyType#INTERVAL},
  * <td>Interval, for example <code>INTERVAL '4:3:2' HOUR TO SECOND</code></td>
  * <td>{@link BigDecimal}; also {@link Long} (milliseconds)</td>
  * </tr>
  * <tr>
- * <td>{@link PolyType#INTERVAL_YEAR}, {@link PolyType#INTERVAL_YEAR_MONTH}, {@link PolyType#INTERVAL_MONTH}</td>
+ * <td> {@link PolyType#INTERVAL}</td>
  * <td>Interval, for example <code>INTERVAL '2-3' YEAR TO MONTH</code></td>
  * <td>{@link BigDecimal}; also {@link Integer} (months)</td>
  * </tr>
@@ -163,25 +145,27 @@ import org.polypheny.db.util.Util;
  * </tr>
  * </table>
  */
-public class RexLiteral extends RexNode {
+@Getter
+@Value
+public class RexLiteral extends RexNode implements Comparable<RexLiteral> {
 
     /**
      * The value of this literal. Must be consistent with its type, as per {@link #valueMatchesType}. For example, you can't store an {@link Integer} value here just because you feel like it -- all numbers are
      * represented by a {@link BigDecimal}. But since this field is private, it doesn't really matter how the values are stored.
      */
-    private final Comparable value;
+    public PolyValue value;
 
     /**
      * The real type of this literal, as reported by {@link #getType}.
      */
-    private final RelDataType type;
+    public AlgDataType type;
 
     // TODO jvs: Use SqlTypeFamily instead; it exists for exactly this purpose (to avoid the confusion which results from overloading PolyType).
     /**
      * An indication of the broad type of this literal -- even if its type isn't a SQL type. Sometimes this will be different than the SQL type; for example, all exact numbers, including integers have typeName
      * {@link PolyType#DECIMAL}. See {@link #valueMatchesType} for the definitive story.
      */
-    private final PolyType typeName;
+    public PolyType polyType;
 
     private static final ImmutableList<TimeUnit> TIME_UNITS = ImmutableList.copyOf( TimeUnit.values() );
 
@@ -189,40 +173,39 @@ public class RexLiteral extends RexNode {
     /**
      * Creates a <code>RexLiteral</code>.
      */
-    public RexLiteral( Comparable value, RelDataType type, PolyType typeName ) {
+    public RexLiteral( PolyValue value, AlgDataType type, PolyType polyType ) {
         this.value = value;
         this.type = Objects.requireNonNull( type );
-        this.typeName = Objects.requireNonNull( typeName );
-        if ( !valueMatchesType( value, typeName, true ) ) {
+        this.polyType = Objects.requireNonNull( polyType );
+        if ( !valueMatchesType( value, polyType, true ) ) {
             System.err.println( value );
             System.err.println( value.getClass().getCanonicalName() );
             System.err.println( type );
-            System.err.println( typeName );
+            System.err.println( polyType );
             throw new IllegalArgumentException();
         }
-//        Preconditions.checkArgument( valueMatchesType( value, typeName, true ) );
         Preconditions.checkArgument( (value != null) || type.isNullable() );
-        Preconditions.checkArgument( typeName != PolyType.ANY );
+        Preconditions.checkArgument( polyType != PolyType.ANY );
         this.digest = computeDigest( RexDigestIncludeType.OPTIONAL );
     }
 
 
-    public RexLiteral( Comparable value, RelDataType type, PolyType typeName, boolean raw ) {
+    public RexLiteral( PolyValue value, AlgDataType type, PolyType polyType, boolean raw ) {
         this.value = value;
         this.type = Objects.requireNonNull( type );
-        this.typeName = Objects.requireNonNull( typeName );
+        this.polyType = Objects.requireNonNull( polyType );
         this.digest = computeDigest( RexDigestIncludeType.OPTIONAL );
     }
 
 
     /**
      * Returns a string which concisely describes the definition of this rex literal. Two literals are equivalent if and only if their digests are the same.
-     *
+     * <p>
      * The digest does not contain the expression's identity, but does include the identity of children.
-     *
-     * Technically speaking 1:INT differs from 1:FLOAT, so we need data type in the literal's digest, however we want to avoid extra verbosity of the {@link RelNode#getDigest()} for readability purposes, so we omit type info in certain cases.
+     * <p>
+     * Technically speaking 1:INT differs from 1:FLOAT, so we need data type in the literal's digest, however we want to avoid extra verbosity of the {@link AlgNode#getDigest()} for readability purposes, so we omit type info in certain cases.
      * For instance, 1:INT becomes 1 (INT is implied by default), however 1:BIGINT always holds the type
-     *
+     * <p>
      * Here's a non-exhaustive list of the "well known cases":
      * <ul>
      * <li>Hide "NOT NULL" for not null literals</li>
@@ -237,7 +220,7 @@ public class RexLiteral extends RexNode {
      * @param includeType whether the digest should include type or not
      * @return digest
      */
-    public final String computeDigest( RexDigestIncludeType includeType ) {
+    public String computeDigest( RexDigestIncludeType includeType ) {
         if ( includeType == RexDigestIncludeType.OPTIONAL ) {
             if ( digest != null ) {
                 // digest is initialized with OPTIONAL, so cached value matches for includeType=OPTIONAL as well
@@ -252,7 +235,7 @@ public class RexLiteral extends RexNode {
             return digest;
         }
 
-        return toJavaString( value, typeName, type, includeType );
+        return toJavaString( value, polyType, type, includeType );
     }
 
 
@@ -262,159 +245,60 @@ public class RexLiteral extends RexNode {
      * @return true if {@link RexDigestIncludeType#OPTIONAL} digest would include data type
      * @see RexCall#computeDigest(boolean)
      */
-    RexDigestIncludeType digestIncludesType() {
+    public RexDigestIncludeType digestIncludesType() {
         return shouldIncludeType( value, type );
     }
 
 
-    public static Pair<Comparable, PolyType> convertType( Comparable value, RelDataType typeName ) {
-        switch ( typeName.getPolyType() ) {
-            case INTEGER:
-            case BIGINT:
-            case TINYINT:
-            case SMALLINT:
-            case DECIMAL:
-            case DOUBLE:
-            case FLOAT:
-            case REAL:
-                if ( value instanceof Short ) {
-                    return new Pair<>( new BigDecimal( (short) value ), PolyType.DECIMAL );
-                } else if ( value instanceof Byte ) {
-                    return new Pair<>( new BigDecimal( (byte) value ), PolyType.DECIMAL );
-                } else if ( value instanceof Character ) {
-                    return new Pair<>( new BigDecimal( (char) value ), PolyType.DECIMAL );
-                } else if ( value instanceof Integer ) {
-                    return new Pair<>( new BigDecimal( (int) value ), PolyType.DECIMAL );
-                } else if ( value instanceof Long ) {
-                    return new Pair<>( new BigDecimal( (long) value ), PolyType.DECIMAL );
-                } else if ( value instanceof Float ) {
-                    return new Pair<>( new BigDecimal( (float) value ), PolyType.DECIMAL );
-                } else if ( value instanceof Double ) {
-                    return new Pair<>( new BigDecimal( (double) value ), PolyType.DECIMAL );
-                }
-            case VARCHAR:
-            case CHAR:
-                if ( value instanceof String ) {
-                    return new Pair<>( new NlsString( (String) value, typeName.getCharset().name(), typeName.getCollation() ), PolyType.CHAR );
-                }
-            case TIMESTAMP:
-                if ( value instanceof String ) {
-                    return new Pair<>( new TimestampString( (String) value ), PolyType.TIMESTAMP );
-                } else if ( value instanceof LocalDateTime ) {
-                    final LocalDateTime dt = (LocalDateTime) value;
-                    final TimestampString ts = new TimestampString(
-                            dt.getYear(),
-                            dt.getMonthValue(),
-                            dt.getDayOfMonth(),
-                            dt.getHour(),
-                            dt.getMinute(),
-                            dt.getSecond()
-                    );
-                    return new Pair<>( ts, PolyType.TIMESTAMP );
-                }
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                if ( value instanceof String ) {
-                    return new Pair<>( new TimestampString( (String) value ), PolyType.TIMESTAMP_WITH_LOCAL_TIME_ZONE );
-                } else if ( value instanceof LocalDateTime ) {
-                    final LocalDateTime dt = (LocalDateTime) value;
-                    final TimestampString ts = new TimestampString(
-                            dt.getYear(),
-                            dt.getMonthValue(),
-                            dt.getDayOfMonth(),
-                            dt.getHour(),
-                            dt.getMinute(),
-                            dt.getSecond()
-                    );
-                    return new Pair<>( ts, PolyType.TIMESTAMP_WITH_LOCAL_TIME_ZONE );
-                }
-        }
-        return new Pair<>( value, typeName.getPolyType() );
+    public static Pair<PolyValue, PolyType> convertType( PolyValue value, AlgDataType typeName ) {
+        PolyValue converted = PolyValue.convert( value, typeName.getPolyType() );
+        return new Pair<>( converted, typeName.getPolyType() );
     }
 
 
     /**
      * @return whether value is appropriate for its type (we have rules about these things)
      */
-    public static boolean valueMatchesType( Comparable value, PolyType typeName, boolean strict ) {
-        if ( value == null ) {
+    public static boolean valueMatchesType( PolyValue value, PolyType typeName, boolean strict ) {
+        if ( value == null || value.isNull() ) {
             return true;
         }
-        switch ( typeName ) {
-            case BOOLEAN:
+        return switch ( typeName ) {
+            case BOOLEAN ->
                 // Unlike SqlLiteral, we do not allow boolean null.
-                return value instanceof Boolean;
-            case NULL:
-                return false; // value should have been null
-            case INTEGER: // not allowed -- use Decimal
-            case TINYINT:
-            case SMALLINT:
-                if ( strict ) {
-                    throw Util.unexpected( typeName );
-                }
-                // fall through
-            case DECIMAL:
-            case DOUBLE:
-            case FLOAT:
-            case REAL:
-            case BIGINT:
-                return value instanceof BigDecimal;
-            case DATE:
-                return value instanceof DateString;
-            case TIME:
-                return value instanceof TimeString;
-            case TIME_WITH_LOCAL_TIME_ZONE:
-                return value instanceof TimeString;
-            case TIMESTAMP:
-                return value instanceof TimestampString;
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                return value instanceof TimestampString;
-            case INTERVAL_YEAR:
-            case INTERVAL_YEAR_MONTH:
-            case INTERVAL_MONTH:
-            case INTERVAL_DAY:
-            case INTERVAL_DAY_HOUR:
-            case INTERVAL_DAY_MINUTE:
-            case INTERVAL_DAY_SECOND:
-            case INTERVAL_HOUR:
-            case INTERVAL_HOUR_MINUTE:
-            case INTERVAL_HOUR_SECOND:
-            case INTERVAL_MINUTE:
-            case INTERVAL_MINUTE_SECOND:
-            case INTERVAL_SECOND:
+                    value.isBoolean();
+            case NULL -> false; // value should have been null
+            // not allowed -- use Decimal
+            case INTEGER, TINYINT, SMALLINT, DECIMAL, DOUBLE, FLOAT, REAL, BIGINT -> value.isNumber();
+            case DATE -> value.isDate();
+            case TIME -> value.isTime();
+            case TIMESTAMP -> value.isTimestamp();
+            case INTERVAL ->
                 // The value of a DAY-TIME interval (whatever the start and end units, even say HOUR TO MINUTE) is in milliseconds (perhaps fractional milliseconds). The value of a YEAR-MONTH interval is in months.
-                return value instanceof BigDecimal;
-            case VARBINARY: // not allowed -- use Binary
-                if ( strict ) {
-                    throw Util.unexpected( typeName );
-                }
-                // fall through
-            case BINARY:
-                return value instanceof ByteString;
-            case VARCHAR: // not allowed -- use Char
-                if ( strict ) {
-                    throw Util.unexpected( typeName );
-                }
-                // fall through
-            case CHAR:
+                    value.isInterval();
+            case VARBINARY -> // not allowed -- use Binary
+                    value.isBinary();
+            case BINARY -> value.isBinary();
+            case VARCHAR, CHAR, TEXT ->
                 // A SqlLiteral's charset and collation are optional; not so a RexLiteral.
-                return (value instanceof NlsString)
-                        && (((NlsString) value).getCharset() != null)
-                        && (((NlsString) value).getCollation() != null);
-            case SYMBOL:
-                return value instanceof Enum;
-            case ROW:
-            case MULTISET:
-                return value instanceof List;
-            case ANY:
+                    value.isString();
+            case SYMBOL -> value.isSymbol();
+            case ROW, MULTISET, ARRAY -> value.isList();
+            case ANY ->
                 // Literal of type ANY is not legal. "CAST(2 AS ANY)" remains an integer literal surrounded by a cast function.
-                return false;
-            default:
-                throw Util.unexpected( typeName );
-        }
+                    false;
+            case GRAPH -> value.isGraph();
+            case NODE -> value.isNode();
+            case EDGE -> value.isEdge();
+            case PATH -> value.isPath();
+            case MAP -> value.isMap();
+            case DOCUMENT -> true;
+            default -> throw Util.unexpected( typeName );
+        };
     }
 
 
-    private static String toJavaString( Comparable value, PolyType typeName, RelDataType type, RexDigestIncludeType includeType ) {
+    private static String toJavaString( PolyValue value, PolyType typeName, AlgDataType type, RexDigestIncludeType includeType ) {
         assert includeType != RexDigestIncludeType.OPTIONAL : "toJavaString must not be called with includeType=OPTIONAL";
         String fullTypeString = type.getFullTypeString();
         if ( value == null ) {
@@ -422,7 +306,7 @@ public class RexLiteral extends RexNode {
         }
         StringWriter sw = new StringWriter();
         PrintWriter pw = new PrintWriter( sw );
-        printAsJava( value, pw, typeName, false, includeType );
+        printAsJava( value, pw, typeName, false );
         pw.flush();
 
         if ( includeType != RexDigestIncludeType.NO_TYPE ) {
@@ -441,7 +325,7 @@ public class RexLiteral extends RexNode {
     /**
      * Computes if data type can be omitted from the digset.
      * For instance, {@code 1:BIGINT} has to keep data type while {@code 1:INT} should be represented as just {@code 1}.
-     *
+     * <p>
      * Implementation assumption: this method should be fast. In fact might call {@link NlsString#getValue()} which could decode the string, however we rely on the cache there.
      *
      * @param value value of the literal
@@ -449,7 +333,7 @@ public class RexLiteral extends RexNode {
      * @return NO_TYPE when type can be omitted, ALWAYS otherwise
      * @see RexLiteral#computeDigest(RexDigestIncludeType)
      */
-    private static RexDigestIncludeType shouldIncludeType( Comparable value, RelDataType type ) {
+    private static RexDigestIncludeType shouldIncludeType( PolyValue value, AlgDataType type ) {
         if ( type.isNullable() ) {
             // This means "null literal", so we require a type for it
             // There might be exceptions like AND(null, true) which are handled by RexCall#computeDigest
@@ -462,16 +346,15 @@ public class RexLiteral extends RexNode {
                 || type.getPolyType() == PolyType.SYMBOL ) {
             // We don't want false:BOOLEAN NOT NULL, so we don't print type information for non-nullable BOOLEAN and INTEGER
             includeType = RexDigestIncludeType.NO_TYPE;
-        } else if ( type.getPolyType() == PolyType.CHAR && value instanceof NlsString ) {
-            NlsString nlsString = (NlsString) value;
+        } else if ( PolyType.STRING_TYPES.contains( type.getPolyType() ) && value.isString() ) {
+            PolyString string = value.asString();
 
             // Ignore type information for 'Bar':CHAR(3)
-            if ( ((nlsString.getCharset() != null
-                    && type.getCharset().equals( nlsString.getCharset() ))
-                    || (nlsString.getCharset() == null
-                    && SqlCollation.IMPLICIT.getCharset().equals( type.getCharset() )))
-                    && nlsString.getCollation().equals( type.getCollation() )
-                    && ((NlsString) value).getValue().length() == type.getPrecision() ) {
+            if ( ((string.getCharset() != null
+                    && type.getCharset().name().equals( string.getCharset().name() ))
+                    || (string.getCharset() == null
+                    && Collation.IMPLICIT.getCharset().name().equals( type.getCharset().name() )))
+                    && string.value.length() == type.getPrecision() ) {
                 includeType = RexDigestIncludeType.NO_TYPE;
             } else {
                 includeType = RexDigestIncludeType.ALWAYS;
@@ -490,114 +373,26 @@ public class RexLiteral extends RexNode {
     }
 
 
-    /**
-     * Returns whether a value is valid as a constant value, using the same criteria as {@link #valueMatchesType}.
-     */
-    public static boolean validConstant( Object o, Litmus litmus ) {
-        if ( o == null
-                || o instanceof BigDecimal
-                || o instanceof NlsString
-                || o instanceof ByteString ) {
-            return litmus.succeed();
-        } else if ( o instanceof List ) {
-            List list = (List) o;
-            for ( Object o1 : list ) {
-                if ( !validConstant( o1, litmus ) ) {
-                    return litmus.fail( "not a constant: {}", o1 );
-                }
-            }
-            return litmus.succeed();
-        } else if ( o instanceof Map ) {
-            @SuppressWarnings("unchecked") final Map<Object, Object> map = (Map) o;
-            for ( Map.Entry entry : map.entrySet() ) {
-                if ( !validConstant( entry.getKey(), litmus ) ) {
-                    return litmus.fail( "not a constant: {}", entry.getKey() );
-                }
-                if ( !validConstant( entry.getValue(), litmus ) ) {
-                    return litmus.fail( "not a constant: {}", entry.getValue() );
-                }
-            }
-            return litmus.succeed();
-        } else {
-            return litmus.fail( "not a constant: {}", o );
-        }
-    }
-
-
-    /**
-     * Returns a list of the time units covered by an interval type such as HOUR TO SECOND. Adds MILLISECOND if the end is SECOND, to deal with fractional seconds.
-     */
-    private static List<TimeUnit> getTimeUnits( PolyType typeName ) {
-        final TimeUnit start = typeName.getStartUnit();
-        final TimeUnit end = typeName.getEndUnit();
-        final ImmutableList<TimeUnit> list = TIME_UNITS.subList( start.ordinal(), end.ordinal() + 1 );
-        if ( end == TimeUnit.SECOND ) {
-            return CompositeList.of( list, ImmutableList.of( TimeUnit.MILLISECOND ) );
-        }
-        return list;
-    }
-
-
-    private String intervalString( BigDecimal v ) {
-        final List<TimeUnit> timeUnits = getTimeUnits( type.getPolyType() );
-        final StringBuilder b = new StringBuilder();
-        for ( TimeUnit timeUnit : timeUnits ) {
-            final BigDecimal[] result = v.divideAndRemainder( timeUnit.multiplier );
-            if ( b.length() > 0 ) {
-                b.append( timeUnit.separator );
-            }
-            final int width = b.length() == 0 ? -1 : width( timeUnit ); // don't pad 1st
-            pad( b, result[0].toString(), width );
-            v = result[1];
-        }
-        if ( Util.last( timeUnits ) == TimeUnit.MILLISECOND ) {
-            while ( b.toString().matches( ".*\\.[0-9]*0" ) ) {
-                if ( b.toString().endsWith( ".0" ) ) {
-                    b.setLength( b.length() - 2 ); // remove ".0"
-                } else {
-                    b.setLength( b.length() - 1 ); // remove "0"
-                }
-            }
-        }
-        return b.toString();
-    }
-
-
-    private static void pad( StringBuilder b, String s, int width ) {
+    public static void pad( StringBuilder b, String s, int width ) {
         if ( width >= 0 ) {
-            for ( int i = s.length(); i < width; i++ ) {
-                b.append( '0' );
-            }
+            b.append( "0".repeat( Math.max( 0, width - s.length() ) ) );
         }
         b.append( s );
     }
 
 
-    private static int width( TimeUnit timeUnit ) {
-        switch ( timeUnit ) {
-            case MILLISECOND:
-                return 3;
-            case HOUR:
-            case MINUTE:
-            case SECOND:
-                return 2;
-            default:
-                return -1;
-        }
-    }
-
-
-    /**
-     * Prints the value this literal as a Java string constant.
-     */
-    public void printAsJava( PrintWriter pw ) {
-        printAsJava( value, pw, typeName, true, RexDigestIncludeType.NO_TYPE );
+    public static int width( TimeUnit timeUnit ) {
+        return switch ( timeUnit ) {
+            case MILLISECOND -> 3;
+            case HOUR, MINUTE, SECOND -> 2;
+            default -> -1;
+        };
     }
 
 
     /**
      * Prints a value as a Java string. The value must be consistent with the type, as per {@link #valueMatchesType}.
-     *
+     * <p>
      * Typical return values:
      *
      * <ul>
@@ -611,40 +406,51 @@ public class RexLiteral extends RexNode {
      * @param value Value
      * @param pw Writer to write to
      * @param typeName Type family
-     * @param includeType if representation should include data type
      */
-    private static void printAsJava( Comparable value, PrintWriter pw, PolyType typeName, boolean java, RexDigestIncludeType includeType ) {
+    private static void printAsJava( PolyValue value, PrintWriter pw, PolyType typeName, boolean java ) {
         switch ( typeName ) {
+            case VARCHAR:
+            case TEXT:
             case CHAR:
-                NlsString nlsString = (NlsString) value;
+                PolyString string = value.asString();
                 if ( java ) {
-                    Util.printJavaString( pw, nlsString.getValue(), true );
+                    Util.printJavaString( pw, value.asString().getValue(), true );
                 } else {
-                    boolean includeCharset = (nlsString.getCharsetName() != null) && !nlsString.getCharsetName().equals( SaffronProperties.INSTANCE.defaultCharset().get() );
-                    pw.print( nlsString.asSql( includeCharset, false ) );
+                    boolean includeCharset = (string.charset != null) && !string.charset.equals( PolyValue.CHARSET );
+                    pw.print( string.toTypedString( includeCharset ) );
                 }
                 break;
             case BOOLEAN:
-                assert value instanceof Boolean;
-                pw.print( ((Boolean) value).booleanValue() );
+                assert value.isBoolean();
+                pw.print( value.asBoolean().value );
                 break;
             case DECIMAL:
-                assert value instanceof BigDecimal;
-                pw.print( value.toString() );
+                assert value.isBigDecimal();
+                pw.print( value.asBigDecimal().value );
                 break;
             case DOUBLE:
-                assert value instanceof BigDecimal;
-                pw.print( Util.toScientificNotation( (BigDecimal) value ) );
+                assert value.isNumber();
+                pw.print( Util.toScientificNotation( value.asNumber().BigDecimalValue() ) );
                 break;
             case BIGINT:
-                assert value instanceof BigDecimal;
-                pw.print( ((BigDecimal) value).longValue() );
+                assert value.isBigDecimal();
+                pw.print( value.asNumber().bigDecimalValue() );
                 pw.print( 'L' );
                 break;
+            case INTEGER, SMALLINT, TINYINT:
+                assert value.isNumber();
+                pw.print( value.asNumber().intValue() );
+                break;
+            case REAL:
+                assert value.isNumber();
+                pw.print( value.asNumber().floatValue() );
+                pw.print( 'R' );
+                break;
             case BINARY:
-                assert value instanceof ByteString;
+            case VARBINARY:
+                assert value.isBinary();
                 pw.print( "X'" );
-                pw.print( ((ByteString) value).toString( 16 ) );
+                pw.print( value.asBinary().value );
                 pw.print( "'" );
                 break;
             case NULL:
@@ -652,67 +458,62 @@ public class RexLiteral extends RexNode {
                 pw.print( "null" );
                 break;
             case SYMBOL:
-                assert value instanceof Enum;
+                assert value.isSymbol();
                 pw.print( "FLAG(" );
                 pw.print( value );
                 pw.print( ")" );
                 break;
             case DATE:
-                assert value instanceof DateString;
-                pw.print( value );
+                assert value.isDate();
+                pw.print( value.toJson() );
                 break;
             case TIME:
-                assert value instanceof TimeString;
-                pw.print( value );
-                break;
-            case TIME_WITH_LOCAL_TIME_ZONE:
-                assert value instanceof TimeString;
-                pw.print( value );
+                assert value.isTime();
+                pw.print( value.toJson() );
                 break;
             case TIMESTAMP:
-                assert value instanceof TimestampString;
-                pw.print( value );
+                assert value.isTimestamp();
+                pw.print( value.asTimestamp() );
                 break;
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                assert value instanceof TimestampString;
-                pw.print( value );
+            case INTERVAL:
+                assert value.isInterval();
+                pw.print( value.asInterval().getMonths() + "-" + value.asInterval().getMillis() );
                 break;
-            case INTERVAL_YEAR:
-            case INTERVAL_YEAR_MONTH:
-            case INTERVAL_MONTH:
-            case INTERVAL_DAY:
-            case INTERVAL_DAY_HOUR:
-            case INTERVAL_DAY_MINUTE:
-            case INTERVAL_DAY_SECOND:
-            case INTERVAL_HOUR:
-            case INTERVAL_HOUR_MINUTE:
-            case INTERVAL_HOUR_SECOND:
-            case INTERVAL_MINUTE:
-            case INTERVAL_MINUTE_SECOND:
-            case INTERVAL_SECOND:
-                if ( value instanceof BigDecimal ) {
-                    pw.print( value.toString() );
-                } else {
-                    assert value == null;
-                    pw.print( "null" );
-                }
+            case ARRAY:
+                pw.print( value.asList().stream().map( e -> e == null ? "" : e.toString() ).toList() );
                 break;
             case MULTISET:
             case ROW:
-                @SuppressWarnings("unchecked") final List<RexLiteral> list = (List) value;
-                pw.print(
-                        new AbstractList<String>() {
-                            @Override
-                            public String get( int index ) {
-                                return list.get( index ).computeDigest( includeType );
-                            }
-
-
-                            @Override
-                            public int size() {
-                                return list.size();
-                            }
-                        } );
+                final List<PolyValue> list = value.asList();
+                pw.print( list.stream().map( PolyValue::toString ).collect( Collectors.toList() ) );
+                break;
+            case MAP:
+                final Map<PolyValue, PolyValue> map = value.asMap();
+                pw.print( map.entrySet().stream().map( Object::toString ).collect( Collectors.toList() ) );
+                break;
+            case NODE:
+                assert value.isNode();
+                pw.print( value );
+                break;
+            case EDGE:
+                assert value.isEdge();
+                pw.print( value );
+                break;
+            case GRAPH:
+                assert value.isGraph();
+                pw.print( value );
+                break;
+            case PATH:
+                assert value.isPath();
+                pw.print( value );
+                break;
+            case DOCUMENT:
+                // assert value.isDocument(); documents can be any PolyValue
+                if ( !value.isDocument() ) {
+                    printAsJava( value, pw, value.getType(), java );
+                } else {
+                    pw.println( value );
+                }
                 break;
             default:
                 assert valueMatchesType( value, typeName, true );
@@ -721,127 +522,9 @@ public class RexLiteral extends RexNode {
     }
 
 
-    /**
-     * Converts a Jdbc string into a RexLiteral. This method accepts a string, as returned by the Jdbc method ResultSet.getString(), and restores the string into an equivalent RexLiteral.
-     * It allows one to use Jdbc strings as a common format for data.
-     *
-     * If a null literal is provided, then a null pointer will be returned.
-     *
-     * @param type data type of literal to be read
-     * @param typeName type family of literal
-     * @param literal the (non-SQL encoded) string representation, as returned by the Jdbc call to return a column as a string
-     * @return a typed RexLiteral, or null
-     */
-    public static RexLiteral fromJdbcString( RelDataType type, PolyType typeName, String literal ) {
-        if ( literal == null ) {
-            return null;
-        }
-
-        switch ( typeName ) {
-            case CHAR:
-                Charset charset = type.getCharset();
-                SqlCollation collation = type.getCollation();
-                NlsString str = new NlsString( literal, charset.name(), collation );
-                return new RexLiteral( str, type, typeName );
-            case BOOLEAN:
-                boolean b = ConversionUtil.toBoolean( literal );
-                return new RexLiteral( b, type, typeName );
-            case DECIMAL:
-            case DOUBLE:
-                BigDecimal d = new BigDecimal( literal );
-                return new RexLiteral( d, type, typeName );
-            case BINARY:
-                byte[] bytes = ConversionUtil.toByteArrayFromString( literal, 16 );
-                return new RexLiteral( new ByteString( bytes ), type, typeName );
-            case NULL:
-                return new RexLiteral( null, type, typeName );
-            case INTERVAL_DAY:
-            case INTERVAL_DAY_HOUR:
-            case INTERVAL_DAY_MINUTE:
-            case INTERVAL_DAY_SECOND:
-            case INTERVAL_HOUR:
-            case INTERVAL_HOUR_MINUTE:
-            case INTERVAL_HOUR_SECOND:
-            case INTERVAL_MINUTE:
-            case INTERVAL_MINUTE_SECOND:
-            case INTERVAL_SECOND:
-                long millis = SqlParserUtil.intervalToMillis( literal, type.getIntervalQualifier() );
-                return new RexLiteral( BigDecimal.valueOf( millis ), type, typeName );
-            case INTERVAL_YEAR:
-            case INTERVAL_YEAR_MONTH:
-            case INTERVAL_MONTH:
-                long months = SqlParserUtil.intervalToMonths( literal, type.getIntervalQualifier() );
-                return new RexLiteral( BigDecimal.valueOf( months ), type, typeName );
-            case DATE:
-            case TIME:
-            case TIMESTAMP:
-                String format = getCalendarFormat( typeName );
-                TimeZone tz = DateTimeUtils.UTC_ZONE;
-                final Comparable v;
-                switch ( typeName ) {
-                    case DATE:
-                        final Calendar cal = DateTimeUtils.parseDateFormat( literal, new SimpleDateFormat( format, Locale.ROOT ), tz );
-                        if ( cal == null ) {
-                            throw new AssertionError( "fromJdbcString: invalid date/time value '" + literal + "'" );
-                        }
-                        v = DateString.fromCalendarFields( cal );
-                        break;
-                    default:
-                        // Allow fractional seconds for times and timestamps
-                        assert format != null;
-                        final DateTimeUtils.PrecisionTime ts = DateTimeUtils.parsePrecisionDateTimeLiteral( literal, new SimpleDateFormat( format, Locale.ROOT ), tz, -1 );
-                        if ( ts == null ) {
-                            throw new AssertionError( "fromJdbcString: invalid date/time value '" + literal + "'" );
-                        }
-                        switch ( typeName ) {
-                            case TIMESTAMP:
-                                v = TimestampString.fromCalendarFields( ts.getCalendar() ).withFraction( ts.getFraction() );
-                                break;
-                            case TIME:
-                                v = TimeString.fromCalendarFields( ts.getCalendar() ).withFraction( ts.getFraction() );
-                                break;
-                            default:
-                                throw new AssertionError();
-                        }
-                }
-                return new RexLiteral( v, type, typeName );
-
-            case SYMBOL:
-                // Symbols are for internal use
-            default:
-                throw new AssertionError( "fromJdbcString: unsupported type" );
-        }
-    }
-
-
-    private static String getCalendarFormat( PolyType typeName ) {
-        switch ( typeName ) {
-            case DATE:
-                return DateTimeUtils.DATE_FORMAT_STRING;
-            case TIME:
-                return DateTimeUtils.TIME_FORMAT_STRING;
-            case TIMESTAMP:
-                return DateTimeUtils.TIMESTAMP_FORMAT_STRING;
-            default:
-                throw new AssertionError( "getCalendarFormat: unknown type" );
-        }
-    }
-
-
-    public PolyType getTypeName() {
-        return typeName;
-    }
-
-
     @Override
-    public RelDataType getType() {
-        return type;
-    }
-
-
-    @Override
-    public SqlKind getKind() {
-        return SqlKind.LITERAL;
+    public Kind getKind() {
+        return Kind.LITERAL;
     }
 
 
@@ -853,321 +536,20 @@ public class RexLiteral extends RexNode {
     }
 
 
-    /**
-     * Returns the value of this literal.
-     *
-     * For backwards compatibility, returns DATE. TIME and TIMESTAMP as a {@link Calendar} value in UTC time zone.
-     */
-    public Comparable getValue() {
-        assert valueMatchesType( value, typeName, true ) : value;
-        if ( value == null ) {
-            return null;
-        }
-        switch ( typeName ) {
-            case TIME:
-            case DATE:
-            case TIMESTAMP:
-                return getValueAs( Calendar.class );
-            default:
-                return value;
-        }
-    }
-
-
-    /**
-     * Returns the value of this literal as required by the query parameterizer.
-     */
-    public Comparable getValueForQueryParameterizer() {
-        assert valueMatchesType( value, typeName, true ) : value;
-        if ( value == null ) {
-            return null;
-        }
-        switch ( type.getPolyType() ) {
-            case TIME:
-                return getValueAs( TimeString.class );
-            case DATE:
-                return getValueAs( DateString.class );
-            case TIMESTAMP:
-                return getValueAs( TimestampString.class );
-            case CHAR:
-            case VARCHAR:
-                return getValueAs( String.class );
-            case BOOLEAN:
-                return getValueAs( Boolean.class );
-            case TINYINT:
-                return getValueAs( Byte.class );
-            case SMALLINT:
-                return getValueAs( Short.class );
-            case INTEGER:
-                return getValueAs( Integer.class );
-            case BIGINT:
-                return getValueAs( Long.class );
-            case DECIMAL:
-                return getValueAs( BigDecimal.class );
-            case FLOAT:
-            case REAL:
-                return getValueAs( Float.class );
-            case DOUBLE:
-                return getValueAs( Double.class );
-
-            /*case BINARY:
-            case VARBINARY:
-                break;
-            case ARRAY:
-                break;*/
-
-            default:
-                return value;
-        }
-    }
-
-
-    /**
-     * Returns the value of this literal, in the form that the calculator program builder wants it.
-     */
-    public Object getValue2() {
-        if ( value == null ) {
-            return null;
-        }
-        switch ( typeName ) {
-            case CHAR:
-                return getValueAs( String.class );
-            case DECIMAL:
-            case TIMESTAMP:
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                return getValueAs( Long.class );
-            case DATE:
-            case TIME:
-            case TIME_WITH_LOCAL_TIME_ZONE:
-                return getValueAs( Integer.class );
-            default:
-                return value;
-        }
-    }
-
-
-    /**
-     * Returns the value of this literal, in the form that the rex-to-lix translator wants it.
-     */
-    public Object getValue3() {
-        if ( value == null ) {
-            return null;
-        }
-        switch ( typeName ) {
-            case DECIMAL:
-                assert value instanceof BigDecimal;
-                return value;
-            default:
-                return getValue2();
-        }
-    }
-
-
-    /**
-     * Returns the value of this literal, in the form that {@link RexInterpreter} wants it.
-     */
-    public Comparable getValue4() {
-        if ( value == null ) {
-            return null;
-        }
-        switch ( typeName ) {
-            case TIMESTAMP:
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                return getValueAs( Long.class );
-            case DATE:
-            case TIME:
-            case TIME_WITH_LOCAL_TIME_ZONE:
-                return getValueAs( Integer.class );
-            default:
-                return value;
-        }
-    }
-
-
-    /**
-     * Returns the value of this literal as an instance of the specified class.
-     *
-     * The following SQL types allow more than one form:
-     *
-     * <ul>
-     * <li>CHAR as {@link NlsString} or {@link String}</li>
-     * <li>TIME as {@link TimeString}, {@link Integer} (milliseconds since midnight), {@link Calendar} (in UTC)</li>
-     * <li>DATE as {@link DateString}, {@link Integer} (days since 1970-01-01), {@link Calendar}</li>
-     * <li>TIMESTAMP as {@link TimestampString}, {@link Long} (milliseconds since 1970-01-01 00:00:00), {@link Calendar}</li>
-     * <li>DECIMAL as {@link BigDecimal} or {@link Long}</li>
-     * </ul>
-     *
-     * Called with {@code clazz} = {@link Comparable}, returns the value in its native form.
-     *
-     * @param clazz Desired return type
-     * @param <T> Return type
-     * @return Value of this literal in the desired type
-     */
-    public <T> T getValueAs( Class<T> clazz ) {
-        if ( value == null || clazz.isInstance( value ) ) {
-            return clazz.cast( value );
-        }
-        switch ( typeName ) {
-            case BINARY:
-                if ( clazz == byte[].class ) {
-                    return clazz.cast( ((ByteString) value).getBytes() );
-                }
-                break;
-            case CHAR:
-                if ( clazz == String.class ) {
-                    return clazz.cast( ((NlsString) value).getValue() );
-                } else if ( clazz == Character.class ) {
-                    return clazz.cast( ((NlsString) value).getValue().charAt( 0 ) );
-                }
-                break;
-            case VARCHAR:
-                if ( clazz == String.class ) {
-                    return clazz.cast( ((NlsString) value).getValue() );
-                }
-                break;
-            case DECIMAL:
-                if ( clazz == Long.class ) {
-                    return clazz.cast( ((BigDecimal) value).unscaledValue().longValue() );
-                }
-                // fall through
-            case BIGINT:
-            case INTEGER:
-            case SMALLINT:
-            case TINYINT:
-            case DOUBLE:
-            case REAL:
-            case FLOAT:
-                if ( clazz == Long.class ) {
-                    return clazz.cast( ((BigDecimal) value).longValue() );
-                } else if ( clazz == Integer.class ) {
-                    return clazz.cast( ((BigDecimal) value).intValue() );
-                } else if ( clazz == Short.class ) {
-                    return clazz.cast( ((BigDecimal) value).shortValue() );
-                } else if ( clazz == Byte.class ) {
-                    return clazz.cast( ((BigDecimal) value).byteValue() );
-                } else if ( clazz == Double.class ) {
-                    return clazz.cast( ((BigDecimal) value).doubleValue() );
-                } else if ( clazz == Float.class ) {
-                    return clazz.cast( ((BigDecimal) value).floatValue() );
-                }
-                break;
-            case DATE:
-                if ( clazz == Integer.class ) {
-                    return clazz.cast( ((DateString) value).getDaysSinceEpoch() );
-                } else if ( clazz == Calendar.class ) {
-                    return clazz.cast( ((DateString) value).toCalendar() );
-                }
-                break;
-            case TIME:
-                if ( clazz == Integer.class ) {
-                    return clazz.cast( ((TimeString) value).getMillisOfDay() );
-                } else if ( clazz == Calendar.class ) {
-                    // Note: Nanos are ignored
-                    return clazz.cast( ((TimeString) value).toCalendar() );
-                }
-                break;
-            case TIME_WITH_LOCAL_TIME_ZONE:
-                if ( clazz == Integer.class ) {
-                    // Milliseconds since 1970-01-01 00:00:00
-                    return clazz.cast( ((TimeString) value).getMillisOfDay() );
-                }
-                break;
-            case TIMESTAMP:
-                if ( clazz == Long.class ) {
-                    // Milliseconds since 1970-01-01 00:00:00
-                    return clazz.cast( ((TimestampString) value).getMillisSinceEpoch() );
-                } else if ( clazz == Calendar.class ) {
-                    // Note: Nanos are ignored
-                    return clazz.cast( ((TimestampString) value).toCalendar() );
-                }
-                break;
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                if ( clazz == Long.class ) {
-                    // Milliseconds since 1970-01-01 00:00:00
-                    return clazz.cast( ((TimestampString) value).getMillisSinceEpoch() );
-                } else if ( clazz == Calendar.class ) {
-                    // Note: Nanos are ignored
-                    return clazz.cast( ((TimestampString) value).toCalendar() );
-                }
-                break;
-            case INTERVAL_YEAR:
-            case INTERVAL_YEAR_MONTH:
-            case INTERVAL_MONTH:
-            case INTERVAL_DAY:
-            case INTERVAL_DAY_HOUR:
-            case INTERVAL_DAY_MINUTE:
-            case INTERVAL_DAY_SECOND:
-            case INTERVAL_HOUR:
-            case INTERVAL_HOUR_MINUTE:
-            case INTERVAL_HOUR_SECOND:
-            case INTERVAL_MINUTE:
-            case INTERVAL_MINUTE_SECOND:
-            case INTERVAL_SECOND:
-                if ( clazz == Integer.class ) {
-                    return clazz.cast( ((BigDecimal) value).intValue() );
-                } else if ( clazz == Long.class ) {
-                    return clazz.cast( ((BigDecimal) value).longValue() );
-                } else if ( clazz == String.class ) {
-                    return clazz.cast( intervalString( getValueAs( BigDecimal.class ).abs() ) );
-                } else if ( clazz == Boolean.class ) {
-                    // return whether negative
-                    return clazz.cast( getValueAs( BigDecimal.class ).signum() < 0 );
-                }
-                break;
-        }
-        throw new AssertionError( "cannot convert " + typeName + " literal to " + clazz );
-    }
-
-
-    public String getValueForFileAdapter() {
-        if ( value == null ) {
-            return null;
-        }
-        switch ( typeName ) {
-            case VARCHAR:
-            case CHAR:
-                return ((NlsString) value).getValue();
-            case BOOLEAN:
-                return Boolean.toString( (Boolean) value );
-            case DATE:
-            case TIME:
-                int i = getValueAs( Integer.class );
-                return String.valueOf( i );
-            case TIMESTAMP:
-                long l = getValueAs( Long.class );
-                return String.valueOf( l );
-            case BINARY:
-                return new String( getValueAs( byte[].class ), StandardCharsets.UTF_8 );
-            default:
-                return value.toString();
-        }
-    }
-
-
-    /**
-     * see {@code org.polypheny.db.adapter.file.Condition}
-     */
-    public Comparable getValueForFileCondition() {
-        switch ( typeName ) {
-            case TIME:
-            case DATE:
-                return getValueAs( Integer.class );
-            case TIMESTAMP:
-                return getValueAs( Long.class );
-            default:
-                return getValueForQueryParameterizer();
-        }
+    @Override
+    public String toString() {
+        return super.toString();
     }
 
 
     public static boolean booleanValue( RexNode node ) {
-        return (Boolean) ((RexLiteral) node).value;
+        return ((RexLiteral) node).value.isBoolean() ? ((RexLiteral) node).value.asBoolean().value : false;
     }
 
 
     @Override
     public boolean isAlwaysTrue() {
-        if ( typeName != PolyType.BOOLEAN ) {
+        if ( polyType != PolyType.BOOLEAN ) {
             return false;
         }
         return booleanValue( this );
@@ -1176,7 +558,7 @@ public class RexLiteral extends RexNode {
 
     @Override
     public boolean isAlwaysFalse() {
-        if ( typeName != PolyType.BOOLEAN ) {
+        if ( polyType != PolyType.BOOLEAN ) {
             return false;
         }
         return !booleanValue( this );
@@ -1195,36 +577,35 @@ public class RexLiteral extends RexNode {
     }
 
 
-    public static Comparable value( RexNode node ) {
+    public static PolyValue value( RexNode node ) {
         return findValue( node );
     }
 
 
     public static int intValue( RexNode node ) {
-        final Comparable value = findValue( node );
-        return ((Number) value).intValue();
+        final PolyValue value = findValue( node );
+        return value.asNumber().intValue();
     }
 
 
-    public static String stringValue( RexNode node ) {
-        final Comparable value = findValue( node );
-        return (value == null) ? null : ((NlsString) value).getValue();
+    public static PolyString stringValue( RexNode node ) {
+        final PolyValue value = findValue( node );
+        return (value == null) ? null : value.asString();
     }
 
 
-    private static Comparable findValue( RexNode node ) {
+    private static PolyValue findValue( RexNode node ) {
         if ( node instanceof RexLiteral ) {
             return ((RexLiteral) node).value;
         }
-        if ( node instanceof RexCall ) {
-            final RexCall call = (RexCall) node;
-            final SqlOperator operator = call.getOperator();
-            if ( operator == SqlStdOperatorTable.CAST ) {
+        if ( node instanceof RexCall call ) {
+            final Operator operator = call.getOperator();
+            if ( operator.getOperatorName() == OperatorName.CAST ) {
                 return findValue( call.getOperands().get( 0 ) );
             }
-            if ( operator == SqlStdOperatorTable.UNARY_MINUS ) {
-                final BigDecimal value = (BigDecimal) findValue( call.getOperands().get( 0 ) );
-                return value.negate();
+            if ( operator.getOperatorName() == OperatorName.UNARY_MINUS ) {
+                final PolyNumber value = findValue( call.getOperands().get( 0 ) ).asNumber();
+                return PolyBigDecimal.of( value.asBigDecimal().bigDecimalValue().negate() );
             }
         }
         throw new AssertionError( "not a literal: " + node );
@@ -1250,6 +631,41 @@ public class RexLiteral extends RexNode {
     @Override
     public <R, P> R accept( RexBiVisitor<R, P> visitor, P arg ) {
         return visitor.visitLiteral( this, arg );
+    }
+
+
+    @Override
+    public int compareTo( RexLiteral o ) {
+        if ( !this.value.getClass().equals( o.value.getClass() ) ) {
+            return -1;
+        }
+
+        int comp = this.value.compareTo( o.value );
+
+        if ( comp != 0 ) {
+            return -1;
+        }
+
+        return this.digest.equals( o.digest )
+                ? 0 : this.digest.length() > o.digest.length()
+                ? 1 : -1;
+    }
+
+
+    /**
+     * Returns the value of this literal with the possibility to handle some edge cases. Like for parameterization.
+     *
+     * @param type the type to convert the value to
+     * @return the value of this literal
+     */
+    public PolyValue getValue( AlgDataType type ) {
+        if ( value == null ) {
+            return null;
+        }
+        if ( PolyType.EXACT_TYPES.contains( type.getPolyType() ) && (PolyType.APPROX_TYPES.contains( value.type ) || PolyType.DECIMAL == value.type) ) {
+            return PolyValue.convert( value, type.getPolyType() );
+        }
+        return value;
     }
 
 }

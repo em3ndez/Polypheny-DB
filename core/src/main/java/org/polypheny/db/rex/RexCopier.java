@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@
 package org.polypheny.db.rex;
 
 
-import org.polypheny.db.rel.type.RelDataType;
+import org.polypheny.db.algebra.type.AlgDataType;
 
 
 /**
@@ -61,7 +61,7 @@ class RexCopier extends RexShuttle {
     }
 
 
-    private RelDataType copy( RelDataType type ) {
+    private AlgDataType copy( AlgDataType type ) {
         return builder.getTypeFactory().copyType( type );
     }
 
@@ -98,7 +98,7 @@ class RexCopier extends RexShuttle {
 
 
     @Override
-    public RexNode visitInputRef( RexInputRef inputRef ) {
+    public RexNode visitIndexRef( RexIndexRef inputRef ) {
         return builder.makeInputRef( copy( inputRef.getType() ), inputRef.getIndex() );
     }
 
@@ -112,7 +112,7 @@ class RexCopier extends RexShuttle {
     @Override
     public RexNode visitLiteral( RexLiteral literal ) {
         // Get the value as is
-        return new RexLiteral( RexLiteral.value( literal ), copy( literal.getType() ), literal.getTypeName() );
+        return new RexLiteral( RexLiteral.value( literal ), copy( literal.getType() ), literal.getPolyType() );
     }
 
 
@@ -126,5 +126,6 @@ class RexCopier extends RexShuttle {
     public RexNode visitRangeRef( RexRangeRef rangeRef ) {
         throw new UnsupportedOperationException();
     }
+
 }
 

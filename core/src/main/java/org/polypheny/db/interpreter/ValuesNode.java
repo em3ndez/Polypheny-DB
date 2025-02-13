@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,13 +37,14 @@ package org.polypheny.db.interpreter;
 import com.google.common.collect.ImmutableList;
 import java.util.ArrayList;
 import java.util.List;
-import org.polypheny.db.rel.core.Values;
+import org.polypheny.db.algebra.core.Values;
 import org.polypheny.db.rex.RexLiteral;
 import org.polypheny.db.rex.RexNode;
+import org.polypheny.db.type.entity.PolyValue;
 
 
 /**
- * Interpreter node that implements a {@link org.polypheny.db.rel.core.Values}.
+ * Interpreter node that implements a {@link org.polypheny.db.algebra.core.Values}.
  */
 public class ValuesNode implements Node {
 
@@ -52,10 +53,10 @@ public class ValuesNode implements Node {
     private final ImmutableList<Row> rows;
 
 
-    public ValuesNode( Compiler compiler, Values rel ) {
-        this.sink = compiler.sink( rel );
-        this.fieldCount = rel.getRowType().getFieldCount();
-        this.rows = createRows( compiler, rel.getTuples() );
+    public ValuesNode( Compiler compiler, Values alg ) {
+        this.sink = compiler.sink( alg );
+        this.fieldCount = alg.getTupleType().getFieldCount();
+        this.rows = createRows( compiler, alg.getTuples() );
     }
 
 
@@ -65,11 +66,11 @@ public class ValuesNode implements Node {
             nodes.addAll( tuple );
         }
         final Scalar scalar = compiler.compile( nodes, null );
-        final Object[] values = new Object[nodes.size()];
+        final PolyValue[] values = new PolyValue[nodes.size()];
         final Context context = compiler.createContext();
         scalar.execute( context, values );
         final ImmutableList.Builder<Row> rows = ImmutableList.builder();
-        Object[] subValues = new Object[fieldCount];
+        PolyValue[] subValues = new PolyValue[fieldCount];
         for ( int i = 0; i < values.length; i += fieldCount ) {
             System.arraycopy( values, i, subValues, 0, fieldCount );
             rows.add( Row.asCopy( subValues ) );
@@ -85,4 +86,5 @@ public class ValuesNode implements Node {
         }
         sink.end();
     }
+
 }

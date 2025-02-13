@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,12 +20,13 @@ import java.util.Collections;
 import java.util.List;
 import lombok.Getter;
 
+@Getter
 public enum DeployMode {
+
     REMOTE( "remote" ),
     DOCKER( "docker" ),
     EMBEDDED( "embedded" );
 
-    @Getter
     private final String name;
 
 
@@ -34,22 +35,11 @@ public enum DeployMode {
     }
 
 
-    public static DeployMode fromString( String mode ) {
-        if ( mode.equals( "remote" ) ) {
-            return REMOTE;
-        } else if ( mode.equals( "docker" ) ) {
-            return DOCKER;
-        } else {
-            return EMBEDDED;
-        }
-    }
-
-
     public enum DeploySetting {
         REMOTE( DeployMode.REMOTE ),
         DOCKER( DeployMode.DOCKER ),
         EMBEDDED( DeployMode.EMBEDDED ),
-        DEFAULT;
+        ALL;
 
         private final DeployMode mode;
         @Getter
@@ -71,8 +61,8 @@ public enum DeployMode {
          * DeploySettings can wrap multiple underlying DeployModes
          * this method returns them
          *
-         * @param availableModes all available modes, to which this setting could belong
-         * @return the modes for which this setting is available
+         * @param availableModes All available modes, to which this setting could belong
+         * @return The modes for which this setting is available
          */
         List<DeployMode> getModes( List<DeployMode> availableModes ) {
             if ( usedByAll ) {
@@ -80,6 +70,11 @@ public enum DeployMode {
             } else {
                 return Collections.singletonList( mode );
             }
+        }
+
+
+        boolean appliesTo( DeployMode mode ) {
+            return usedByAll || this.mode.equals( mode );
         }
 
     }

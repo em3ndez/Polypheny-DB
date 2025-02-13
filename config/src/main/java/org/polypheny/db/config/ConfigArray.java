@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2022 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package org.polypheny.db.config;
 
 
 import java.math.BigDecimal;
+import java.util.Arrays;
 import org.polypheny.db.config.exception.ConfigRuntimeException;
 
 
@@ -27,6 +28,8 @@ import org.polypheny.db.config.exception.ConfigRuntimeException;
 public class ConfigArray extends Config {
 
     private ConfigScalar[] array;
+    private ConfigScalar[] oldArray;
+    private ConfigScalar[] defaultArray;
 
 
     public ConfigArray( final String key, final int[] array ) {
@@ -36,6 +39,7 @@ public class ConfigArray extends Config {
             fill[i] = (ConfigScalar) new ConfigInteger( key + "." + i, array[i] ).isObservable( false );
         }
         this.array = fill;
+        this.defaultArray = this.array.clone();
     }
 
 
@@ -46,6 +50,7 @@ public class ConfigArray extends Config {
             fill[i] = (ConfigScalar) new ConfigDouble( key + "." + i, array[i] ).isObservable( false );
         }
         this.array = fill;
+        this.defaultArray = this.array.clone();
     }
 
 
@@ -56,6 +61,7 @@ public class ConfigArray extends Config {
             fill[i] = (ConfigScalar) new ConfigLong( key + "." + i, array[i] ).isObservable( false );
         }
         this.array = fill;
+        this.defaultArray = this.array.clone();
     }
 
 
@@ -66,6 +72,7 @@ public class ConfigArray extends Config {
             fill[i] = (ConfigScalar) new ConfigDecimal( key + "." + i, array[i] ).isObservable( false );
         }
         this.array = fill;
+        this.defaultArray = this.array.clone();
     }
 
 
@@ -76,6 +83,7 @@ public class ConfigArray extends Config {
             fill[i] = (ConfigScalar) new ConfigString( key + "." + i, array[i] ).isObservable( false );
         }
         this.array = fill;
+        this.defaultArray = this.array.clone();
     }
 
 
@@ -86,6 +94,44 @@ public class ConfigArray extends Config {
             fill[i] = (ConfigScalar) new ConfigBoolean( key + "." + i, array[i] ).isObservable( false );
         }
         this.array = fill;
+        this.defaultArray = this.array.clone();
+    }
+
+
+    @Override
+    public Object getPlainValueObject() {
+        return array;
+    }
+
+
+    @Override
+    public Object getDefaultValue() {
+        return defaultArray;
+    }
+
+
+    /**
+     * Checks if the currently set config value, is equal to the system configured default.
+     * If you want to reset it to the configured defaultValue use {@link #resetToDefault()}.
+     * To change the systems default value you can use: {@link #changeDefaultValue(Object)}.
+     *
+     * @return true if it is set to default, false if it deviates.
+     */
+    @Override
+    public boolean isDefault() {
+        return Arrays.equals( defaultArray, array );
+    }
+
+
+    /**
+     * Restores the current value to the system configured default value.
+     *
+     * To obtain the system configured defaultValue use {@link #getDefaultValue()}.
+     * If you want to check if the current value deviates from default use: {@link #isDefault()}.
+     */
+    @Override
+    public void resetToDefault() {
+        array = defaultArray.clone();
     }
 
 
@@ -102,10 +148,18 @@ public class ConfigArray extends Config {
     @Override
     public boolean setIntArray( int[] value ) {
         if ( validate( value ) ) {
+            if ( requiresRestart() ) {
+                if ( this.oldArray == null ) {
+                    this.oldArray = array;
+                }
+            }
             int counter = 0;
             for ( ConfigScalar c : array ) {
                 c.setInt( value[counter] );
                 counter++;
+            }
+            if ( this.oldArray != null && Arrays.equals( this.oldArray, array ) ) {
+                this.oldArray = null;
             }
             notifyConfigListeners();
             return true;
@@ -128,10 +182,18 @@ public class ConfigArray extends Config {
     @Override
     public boolean setDoubleArray( double[] value ) {
         if ( validate( value ) ) {
+            if ( requiresRestart() ) {
+                if ( this.oldArray == null ) {
+                    this.oldArray = array;
+                }
+            }
             int counter = 0;
             for ( ConfigScalar c : array ) {
                 c.setDouble( value[counter] );
                 counter++;
+            }
+            if ( this.oldArray != null && Arrays.equals( this.oldArray, array ) ) {
+                this.oldArray = null;
             }
             notifyConfigListeners();
             return true;
@@ -154,10 +216,18 @@ public class ConfigArray extends Config {
     @Override
     public boolean setLongArray( long[] value ) {
         if ( validate( value ) ) {
+            if ( requiresRestart() ) {
+                if ( this.oldArray == null ) {
+                    this.oldArray = array;
+                }
+            }
             int counter = 0;
             for ( ConfigScalar c : array ) {
                 c.setLong( value[counter] );
                 counter++;
+            }
+            if ( this.oldArray != null && Arrays.equals( this.oldArray, array ) ) {
+                this.oldArray = null;
             }
             notifyConfigListeners();
             return true;
@@ -180,10 +250,18 @@ public class ConfigArray extends Config {
     @Override
     public boolean setDecimalArray( BigDecimal[] value ) {
         if ( validate( value ) ) {
+            if ( requiresRestart() ) {
+                if ( this.oldArray == null ) {
+                    this.oldArray = array;
+                }
+            }
             int counter = 0;
             for ( ConfigScalar c : array ) {
                 c.setDecimal( value[counter] );
                 counter++;
+            }
+            if ( this.oldArray != null && Arrays.equals( this.oldArray, array ) ) {
+                this.oldArray = null;
             }
             notifyConfigListeners();
             return true;
@@ -207,10 +285,18 @@ public class ConfigArray extends Config {
     @Override
     public boolean setStringArray( String[] value ) {
         if ( validate( value ) ) {
+            if ( requiresRestart() ) {
+                if ( this.oldArray == null ) {
+                    this.oldArray = array;
+                }
+            }
             int counter = 0;
             for ( ConfigScalar c : array ) {
                 c.setString( value[counter] );
                 counter++;
+            }
+            if ( this.oldArray != null && Arrays.equals( this.oldArray, array ) ) {
+                this.oldArray = null;
             }
             notifyConfigListeners();
             return true;
@@ -234,10 +320,18 @@ public class ConfigArray extends Config {
     @Override
     public boolean setBooleanArray( boolean[] value ) {
         if ( validate( value ) ) {
+            if ( requiresRestart() ) {
+                if ( this.oldArray == null ) {
+                    this.oldArray = array;
+                }
+            }
             int counter = 0;
             for ( ConfigScalar c : array ) {
                 c.setBoolean( value[counter] );
                 counter++;
+            }
+            if ( this.oldArray != null && Arrays.equals( this.oldArray, array ) ) {
+                this.oldArray = null;
             }
             notifyConfigListeners();
             return true;

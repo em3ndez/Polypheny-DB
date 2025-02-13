@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,22 +16,23 @@
 
 package org.polypheny.db.processing;
 
-
+import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.TimeZone;
 import lombok.Getter;
-import org.apache.calcite.avatica.AvaticaSite;
+import lombok.Setter;
 import org.apache.calcite.linq4j.QueryProvider;
+import org.jetbrains.annotations.NotNull;
 import org.polypheny.db.adapter.DataContext;
 import org.polypheny.db.adapter.java.JavaTypeFactory;
-import org.polypheny.db.rel.type.RelDataType;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.catalog.exceptions.GenericRuntimeException;
+import org.polypheny.db.catalog.snapshot.Snapshot;
 import org.polypheny.db.runtime.Hook;
-import org.polypheny.db.schema.PolyphenyDbSchema;
-import org.polypheny.db.schema.SchemaPlus;
 import org.polypheny.db.transaction.Statement;
+import org.polypheny.db.type.entity.PolyValue;
 import org.polypheny.db.util.Holder;
 
 
@@ -40,24 +41,51 @@ import org.polypheny.db.util.Holder;
  */
 public class DataContextImpl implements DataContext {
 
-    private final HashMap<String, Object> map;
-    private final PolyphenyDbSchema rootSchema;
+    private final Map<String, Object> map;
+
+    @Getter
+    private final Snapshot snapshot;
+    @Getter
     private final QueryProvider queryProvider;
+    @Getter
     private final JavaTypeFactory typeFactory;
     private final TimeZone timeZone = TimeZone.getDefault();
     @Getter
     private final Statement statement;
 
-    private final Map<Long, RelDataType> parameterTypes; // ParameterIndex -> Data Type
-    private final List<Map<Long, Object>> parameterValues; // List of ( ParameterIndex -> Value )
+    @Getter
+    private Map<Long, AlgDataType> parameterTypes; // ParameterIndex -> Data ExpressionType
+    @Getter
+    private List<Map<Long, PolyValue>> parameterValues; // List of ( ParameterIndex -> Value )
+
+    private final Map<Integer, List<Map<Long, PolyValue>>> otherParameterValues;
+
+    int i = 0;
+
+    @Getter
+    @Setter
+    private boolean isMixedModel = false;
 
 
-    public DataContextImpl( QueryProvider queryProvider, Map<String, Object> parameters, PolyphenyDbSchema rootSchema, JavaTypeFactory typeFactory, Statement statement ) {
+    private DataContextImpl( QueryProvider queryProvider, Map<String, Object> parameters, Snapshot snapshot, JavaTypeFactory typeFactory, Statement statement, Map<Long, AlgDataType> parameterTypes, List<Map<Long, PolyValue>> parameterValues ) {
         this.queryProvider = queryProvider;
         this.typeFactory = typeFactory;
-        this.rootSchema = rootSchema;
+        this.snapshot = snapshot;
         this.statement = statement;
+        this.map = getMedaInfo( parameters );
+        this.parameterTypes = parameterTypes;
+        this.parameterValues = new ArrayList<>( parameterValues );
+        otherParameterValues = new HashMap<>();
+    }
 
+
+    public DataContextImpl( QueryProvider queryProvider, Map<String, Object> parameters, Snapshot snapshot, JavaTypeFactory typeFactory, Statement statement ) {
+        this( queryProvider, parameters, snapshot, typeFactory, statement, new HashMap<>(), new ArrayList<>() );
+    }
+
+
+    @NotNull
+    private Map<String, Object> getMedaInfo( Map<String, Object> parameters ) {
         // Store the time at which the query started executing. The SQL standard says that functions such as CURRENT_TIMESTAMP return the same value throughout the query.
         final Holder<Long> timeHolder = Holder.of( System.currentTimeMillis() );
 
@@ -65,43 +93,24 @@ public class DataContextImpl implements DataContext {
         Hook.CURRENT_TIME.run( timeHolder );
         final long time = timeHolder.get();
         final long localOffset = timeZone.getOffset( time );
-        final long currentOffset = localOffset;
 
         // Give a hook chance to alter standard input, output, error streams.
         final Holder<Object[]> streamHolder = Holder.of( new Object[]{ System.in, System.out, System.err } );
         Hook.STANDARD_STREAMS.run( streamHolder );
 
-        map = new HashMap<>();
-        map.put( Variable.UTC_TIMESTAMP.camelName, time );
-        map.put( Variable.CURRENT_TIMESTAMP.camelName, time + currentOffset );
-        map.put( Variable.LOCAL_TIMESTAMP.camelName, time + localOffset );
-        map.put( Variable.TIME_ZONE.camelName, timeZone );
-        map.put( Variable.STDIN.camelName, streamHolder.get()[0] );
-        map.put( Variable.STDOUT.camelName, streamHolder.get()[1] );
-        map.put( Variable.STDERR.camelName, streamHolder.get()[2] );
+        Map<String, Object> map = new HashMap<>();
         for ( Map.Entry<String, Object> entry : parameters.entrySet() ) {
             Object e = entry.getValue();
-            if ( e == null ) {
-                e = AvaticaSite.DUMMY_VALUE;
-            }
+            //e = AvaticaSite.DUMMY_VALUE;
             map.put( entry.getKey(), e );
         }
-
-        parameterTypes = new HashMap<>();
-        parameterValues = new LinkedList<>();
+        return map;
     }
 
 
     @Override
     public synchronized Object get( String name ) {
-        Object o = map.get( name );
-        if ( o == AvaticaSite.DUMMY_VALUE ) {
-            return null;
-        }
-        /* if ( o == null && Variable.SQL_ADVISOR.camelName.equals( name ) ) {
-            return getSqlAdvisor();
-        } */
-        return o;
+        return map.get( name );
     }
 
 
@@ -112,89 +121,102 @@ public class DataContextImpl implements DataContext {
 
 
     @Override
-    public void addParameterValues( long index, RelDataType type, List<Object> data ) {
+    public void addParameterValues( long index, @NotNull AlgDataType type, @NotNull List<PolyValue> data ) {
         if ( parameterTypes.containsKey( index ) ) {
-            throw new RuntimeException( "There are already values assigned to this index" );
+            throw new GenericRuntimeException( "There are already values assigned to this index" );
         }
-        if ( parameterValues.size() == 0 ) {
-            for ( Object d : data ) {
+        if ( parameterValues.isEmpty() ) {
+            for ( Object ignored : data ) {
                 parameterValues.add( new HashMap<>() );
             }
         }
         if ( parameterValues.size() != data.size() ) {
-            throw new RuntimeException( "Expecting " + parameterValues.size() + " rows but " + data.size() + " values specified!" );
+            throw new GenericRuntimeException( "Expecting " + parameterValues.size() + " rows but " + data.size() + " values specified!" );
         }
         parameterTypes.put( index, type );
         int i = 0;
-        for ( Object d : data ) {
-            parameterValues.get( i++ ).put( index, d );
+        for ( PolyValue d : data ) {
+            parameterValues.get( i++ ).put( index, check( d, type ) );
         }
     }
 
 
+    private PolyValue check( PolyValue value, AlgDataType type ) {
+        if ( value == null || value.isNull() ) {
+            return null;
+        }
+
+        switch ( type.getPolyType() ) {
+            case DECIMAL -> {
+                if ( value.asNumber().toString().replaceFirst( "^0", "" ).replace( ".", "" ).replace( "-", "" ).length() > type.getPrecision() ) {
+                    throw new GenericRuntimeException( "Numeric value is too long" );
+                }
+            }
+            case VARCHAR, CHAR -> {
+                if ( type.getPrecision() >= 0 && value.asString().value.length() > type.getPrecision() ) {
+                    throw new GenericRuntimeException( "Char value is too long" );
+                }
+            }
+            case BINARY, VARBINARY -> {
+                if ( type.getPrecision() >= 0 && value.asBinary().length() > type.getPrecision() ) {
+                    throw new GenericRuntimeException( "Binary value is too long" );
+                }
+            }
+        }
+        return value;
+    }
+
+
     @Override
-    public RelDataType getParameterType( long index ) {
+    public AlgDataType getParameterType( long index ) {
         return parameterTypes.get( index );
     }
 
 
     @Override
-    public List<Map<Long, Object>> getParameterValues() {
-        return parameterValues;
+    public void setParameterValues( @NotNull List<Map<Long, PolyValue>> values ) {
+        parameterValues = new ArrayList<>( values );
+    }
+
+
+    @Override
+    public void setParameterTypes( @NotNull Map<Long, @NotNull AlgDataType> types ) {
+        parameterTypes = new HashMap<>( types );
     }
 
 
     @Override
     public void resetParameterValues() {
-        parameterTypes.clear();
-        parameterValues.clear();
+        parameterTypes = new HashMap<>();
+        parameterValues = new ArrayList<>();
     }
 
-    /*
-    private SqlAdvisor getSqlAdvisor() {
-        final String schemaName;
-        try {
-            schemaName = con.getSchema();
-        } catch ( SQLException e ) {
-            throw new RuntimeException( e );
+
+    @Override
+    public DataContext switchContext() {
+        if ( otherParameterValues.containsKey( i ) ) {
+            return new DataContextImpl( queryProvider, map, snapshot, typeFactory, statement, parameterTypes, otherParameterValues.get( i++ ) );
         }
-        final List<String> schemaPath =
-                schemaName == null
-                        ? ImmutableList.of()
-                        : ImmutableList.of( schemaName );
-        final SqlValidatorWithHints validator =
-                new SqlAdvisorValidator(
-                        SqlStdOperatorTable.instance(),
-                        new PolyphenyDbCatalogReader( rootSchema, schemaPath, typeFactory ), typeFactory, SqlConformanceEnum.DEFAULT );
-        final PolyphenyDbConnectionConfig config = con.config();
-        // This duplicates org.polypheny.db.prepare.PolyphenyDbPrepareImpl.prepare2_
-        final Config parserConfig = SqlParser.configBuilder()
-                .setQuotedCasing( config.quotedCasing() )
-                .setUnquotedCasing( config.unquotedCasing() )
-                .setQuoting( config.quoting() )
-                .setConformance( config.conformance() )
-                .setCaseSensitive( RuntimeConfig.CASE_SENSITIVE.getBoolean() )
-                .build();
-        return new SqlAdvisor( validator, parserConfig );
-    }
-*/
-
-
-    @Override
-    public SchemaPlus getRootSchema() {
-        return rootSchema == null ? null : rootSchema.plus();
+        return this;
     }
 
 
     @Override
-    public JavaTypeFactory getTypeFactory() {
-        return typeFactory;
+    public void addContext() {
+        otherParameterValues.put( otherParameterValues.size(), parameterValues );
+        parameterValues = new ArrayList<>();
     }
 
 
     @Override
-    public QueryProvider getQueryProvider() {
-        return queryProvider;
+    public void resetContext() {
+        i = 0;
+        if ( !otherParameterValues.isEmpty() ) {
+            parameterValues = otherParameterValues.get( i );
+        } else {
+            parameterValues = new ArrayList<>();
+        }
     }
+
 
 }

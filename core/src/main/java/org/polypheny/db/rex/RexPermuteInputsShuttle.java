@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,8 +36,8 @@ package org.polypheny.db.rex;
 
 import com.google.common.collect.ImmutableList;
 import java.util.List;
-import org.polypheny.db.rel.RelNode;
-import org.polypheny.db.rel.type.RelDataTypeField;
+import org.polypheny.db.algebra.AlgNode;
+import org.polypheny.db.algebra.type.AlgDataTypeField;
 import org.polypheny.db.util.mapping.Mappings.TargetMapping;
 
 
@@ -50,24 +50,24 @@ import org.polypheny.db.util.mapping.Mappings.TargetMapping;
 public class RexPermuteInputsShuttle extends RexShuttle {
 
     private final TargetMapping mapping;
-    private final ImmutableList<RelDataTypeField> fields;
+    private final ImmutableList<AlgDataTypeField> fields;
 
 
     /**
      * Creates a RexPermuteInputsShuttle.
      *
      * The mapping provides at most one target for every source. If a source has no targets and is referenced in the expression, {@link TargetMapping#getTarget(int)}
-     * will give an error. Otherwise the mapping gives a unique target.
+     * will give an error. Otherwise, the mapping gives a unique target.
      *
      * @param mapping Mapping
-     * @param inputs Input relational expressions
+     * @param inputs Input algebra expressions
      */
-    public RexPermuteInputsShuttle( TargetMapping mapping, RelNode... inputs ) {
+    public RexPermuteInputsShuttle( TargetMapping mapping, AlgNode... inputs ) {
         this( mapping, fields( inputs ) );
     }
 
 
-    private RexPermuteInputsShuttle( TargetMapping mapping, ImmutableList<RelDataTypeField> fields ) {
+    private RexPermuteInputsShuttle( TargetMapping mapping, ImmutableList<AlgDataTypeField> fields ) {
         this.mapping = mapping;
         this.fields = fields;
     }
@@ -81,44 +81,45 @@ public class RexPermuteInputsShuttle extends RexShuttle {
     }
 
 
-    private static ImmutableList<RelDataTypeField> fields( RelNode[] inputs ) {
-        final ImmutableList.Builder<RelDataTypeField> fields = ImmutableList.builder();
-        for ( RelNode input : inputs ) {
-            fields.addAll( input.getRowType().getFieldList() );
+    private static ImmutableList<AlgDataTypeField> fields( AlgNode[] inputs ) {
+        final ImmutableList.Builder<AlgDataTypeField> fields = ImmutableList.builder();
+        for ( AlgNode input : inputs ) {
+            fields.addAll( input.getTupleType().getFields() );
         }
         return fields.build();
     }
 
 
     @Override
-    public RexNode visitInputRef( RexInputRef local ) {
+    public RexNode visitIndexRef( RexIndexRef local ) {
         final int index = local.getIndex();
         int target = mapping.getTarget( index );
-        return new RexInputRef( target, local.getType() );
+        return new RexIndexRef( target, local.getType() );
     }
 
 
     @Override
     public RexNode visitCall( RexCall call ) {
-        if ( call.getOperator() == RexBuilder.GET_OPERATOR ) {
-            final String name = (String) ((RexLiteral) call.getOperands().get( 1 )).getValue2();
+        if ( call.getOperator().equals( RexBuilder.GET_OPERATOR ) ) {
+            final String name = ((RexLiteral) call.getOperands().get( 1 )).getValue().asString().value;
             final int i = lookup( fields, name );
             if ( i >= 0 ) {
-                return RexInputRef.of( i, fields );
+                return RexIndexRef.of( i, fields );
             }
         }
         return super.visitCall( call );
     }
 
 
-    private static int lookup( List<RelDataTypeField> fields, String name ) {
+    private static int lookup( List<AlgDataTypeField> fields, String name ) {
         for ( int i = 0; i < fields.size(); i++ ) {
-            final RelDataTypeField field = fields.get( i );
+            final AlgDataTypeField field = fields.get( i );
             if ( field.getName().equals( name ) ) {
                 return i;
             }
         }
         return -1;
     }
+
 }
 

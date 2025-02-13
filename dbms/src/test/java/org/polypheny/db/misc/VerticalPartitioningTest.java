@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,29 +16,46 @@
 
 package org.polypheny.db.misc;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import com.google.common.collect.ImmutableList;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
-import org.polypheny.db.AdapterTestSuite;
+import java.util.List;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.polypheny.db.TestHelper;
 import org.polypheny.db.TestHelper.JdbcConnection;
-import org.polypheny.db.excluded.CassandraExcluded;
+import org.polypheny.db.catalog.Catalog;
+import org.polypheny.db.catalog.entity.allocation.AllocationPlacement;
+import org.polypheny.db.catalog.entity.logical.LogicalTable;
+import org.polypheny.db.catalog.logistic.Pattern;
+import org.polypheny.jdbc.PrismInterfaceServiceException;
+
 
 @SuppressWarnings({ "SqlDialectInspection", "SqlNoDataSourceInspection" })
-@Category({ AdapterTestSuite.class, CassandraExcluded.class })
+@Tag("adapter")
 public class VerticalPartitioningTest {
 
 
-    @BeforeClass
+    private static TestHelper helper;
+
+
+    @BeforeAll
     public static void start() {
         // Ensures that Polypheny-DB is running
-        //noinspection ResultOfMethodCallIgnored
-        TestHelper.getInstance();
+        helper = TestHelper.getInstance();
+    }
+
+
+    @BeforeEach
+    public void beforeEach() {
+        helper.randomizeCatalogIds();
     }
 
 
@@ -54,19 +71,34 @@ public class VerticalPartitioningTest {
                         + "PRIMARY KEY (tprimary) )" );
 
                 try {
-                    // Deploy additional store
-                    statement.executeUpdate( "ALTER ADAPTERS ADD \"store1\" USING 'org.polypheny.db.adapter.jdbc.stores.HsqldbStore'"
+                    // Deploy additional storeId
+                    statement.executeUpdate( "ALTER ADAPTERS ADD \"store1\" USING 'Hsqldb' AS 'Store'"
                             + " WITH '{maxConnections:\"25\",trxControlMode:locks,trxIsolationLevel:read_committed,type:Memory,tableType:Memory,mode:embedded}'" );
 
                     // Add placement
                     statement.executeUpdate( "ALTER TABLE \"partitioningtest\" ADD PLACEMENT (tvarchar) ON STORE \"store1\"" );
 
-                    // Change placement on initial store
+                    // Change placement on initial storeId
                     statement.executeUpdate( "ALTER TABLE \"partitioningtest\" MODIFY PLACEMENT (tinteger) ON STORE \"hsqldb\"" );
 
                     // Insert data
                     statement.executeUpdate( "INSERT INTO partitioningtest VALUES (1,5,'foo')" );
+
+                    // Checks
+                    /*TestHelper.checkResultSet(
+                            statement.executeQuery( "SELECT * FROM partitioningtest ORDER BY tprimary" ),
+                            ImmutableList.of(
+                                    new Object[]{ 1, 5, "foo" } ) );*/
+
                     statement.executeUpdate( "INSERT INTO partitioningtest VALUES (2,22,'bar'),(3,69,'xyz')" );
+
+                    // Checks
+                    TestHelper.checkResultSet(
+                            statement.executeQuery( "SELECT * FROM partitioningtest ORDER BY tprimary" ),
+                            ImmutableList.of(
+                                    new Object[]{ 1, 5, "foo" },
+                                    new Object[]{ 2, 22, "bar" },
+                                    new Object[]{ 3, 69, "xyz" } ) );
 
                     // Update data
                     statement.executeUpdate( "UPDATE partitioningtest SET tinteger = 33 WHERE tprimary = 1" );
@@ -82,7 +114,7 @@ public class VerticalPartitioningTest {
                                     new Object[]{ 1, 33, "foo" },
                                     new Object[]{ 4, 22, "bar" } ) );
                 } finally {
-                    // Drop table and store
+                    // Drop table and storeId
                     statement.executeUpdate( "DROP TABLE partitioningtest" );
                     statement.executeUpdate( "ALTER ADAPTERS DROP \"store1\"" );
                 }
@@ -103,14 +135,14 @@ public class VerticalPartitioningTest {
                         + "PRIMARY KEY (tprimary) )" );
 
                 try {
-                    // Deploy additional store
-                    statement.executeUpdate( "ALTER ADAPTERS ADD \"store1\" USING 'org.polypheny.db.adapter.jdbc.stores.HsqldbStore'"
+                    // Deploy additional storeId
+                    statement.executeUpdate( "ALTER ADAPTERS ADD \"store1\" USING 'Hsqldb' AS 'Store'"
                             + " WITH '{maxConnections:\"25\",trxControlMode:locks,trxIsolationLevel:read_committed,type:Memory,tableType:Memory,mode:embedded}'" );
 
                     // Add placement
                     statement.executeUpdate( "ALTER TABLE \"partitioningtest\" ADD PLACEMENT (tvarchar) ON STORE \"store1\"" );
 
-                    // Change placement on initial store
+                    // Change placement on initial storeId
                     statement.executeUpdate( "ALTER TABLE \"partitioningtest\" MODIFY PLACEMENT (tinteger) ON STORE \"hsqldb\"" );
 
                     // Insert Data
@@ -136,11 +168,193 @@ public class VerticalPartitioningTest {
                                     new Object[]{ 1, 33, "foo" },
                                     new Object[]{ 2, 22, "bar" },
                                     new Object[]{ 3, 69, "foobar" } ) );
-
                 } finally {
-                    // Drop table and store
+                    // Drop table and storeId
                     statement.executeUpdate( "DROP TABLE partitioningtest" );
                     statement.executeUpdate( "ALTER ADAPTERS DROP \"store1\"" );
+                }
+            }
+        }
+    }
+
+
+    @Test
+    public void dataPlacementTest() throws SQLException {
+        try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
+            Connection connection = polyphenyDbConnection.getConnection();
+
+            try ( Statement statement = connection.createStatement() ) {
+                statement.executeUpdate( "CREATE TABLE verticalDataPlacementTest( "
+                        + "tprimary INTEGER NOT NULL, "
+                        + "tinteger INTEGER NULL, "
+                        + "tvarchar VARCHAR(20) NULL, "
+                        + "PRIMARY KEY (tprimary) )" );
+
+                try {
+                    LogicalTable table = Catalog.snapshot().rel().getTables( null, new Pattern( "verticaldataplacementtest" ) ).get( 0 );
+
+                    // Check if initially as many DataPlacements are created as requested (one for each storeId)
+                    assertEquals( 1, Catalog.snapshot().alloc().getPlacementsFromLogical( table.id ).size() );
+
+                    AllocationPlacement dataPlacement = Catalog.snapshot().alloc().getPlacementsFromLogical( table.id ).get( 0 );
+
+                    // Check how many columnPlacements are added to the one DataPlacement
+                    assertEquals( table.getColumnIds().size(), Catalog.snapshot().alloc().getColumns( dataPlacement.id ).size() );
+
+                    // Check how many partitionPlacements are added to the one DataPlacement
+                    assertEquals( 1, Catalog.snapshot().alloc().getPartitionsFromLogical( table.id ).size() );
+
+                    // ADD adapter
+                    statement.executeUpdate( "ALTER ADAPTERS ADD \"anotherstore\" USING 'Hsqldb' AS 'Store'"
+                            + " WITH '{maxConnections:\"25\",path:., trxControlMode:locks,trxIsolationLevel:read_committed,type:Memory,tableType:Memory,mode:embedded}'" );
+
+                    // ADD FullPlacement
+                    statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" ADD PLACEMENT ON STORE \"anotherstore\"" );
+
+                    // Check if we now have two  dataPlacements in table
+                    table = Catalog.snapshot().rel().getTable( table.id ).orElseThrow();
+                    assertEquals( 2, Catalog.snapshot().alloc().getPlacementsFromLogical( table.id ).size() );
+
+                    // Modify columns on second storeId
+                    statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" MODIFY PLACEMENT (tprimary) ON STORE anotherstore" );
+                    List<AllocationPlacement> dataPlacements = Catalog.snapshot().alloc().getPlacementsFromLogical( table.id );
+
+                    long adapterId = -1;
+                    long initialAdapterId = -1;
+                    for ( AllocationPlacement dp : dataPlacements ) {
+                        if ( Catalog.snapshot().getAdapter( dp.adapterId ).orElseThrow().uniqueName.equals( "anotherstore" ) ) {
+                            adapterId = dp.adapterId;
+                            assertEquals( 1, Catalog.snapshot().alloc().getColumns( dp.id ).size() );
+                        } else {
+                            initialAdapterId = dp.adapterId;
+                        }
+                    }
+
+                    // MODIFY by adding single column on second storeId
+                    statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" MODIFY PLACEMENT (tprimary, tvarchar) ON STORE anotherstore" );
+                    dataPlacements = Catalog.snapshot().alloc().getPlacementsFromLogical( table.id );
+                    for ( AllocationPlacement dp : dataPlacements ) {
+                        if ( dp.adapterId == adapterId ) {
+                            assertEquals( 2, Catalog.snapshot().alloc().getColumns( dp.id ).size() );
+                        } else if ( dp.adapterId == initialAdapterId ) {
+                            assertEquals( 3, Catalog.snapshot().alloc().getColumns( dp.id ).size() );
+                        }
+                    }
+
+                    // MODIFY by adding single column on first storeId
+                    statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" MODIFY PLACEMENT (tinteger) ON STORE hsqldb" );
+                    dataPlacements = Catalog.snapshot().alloc().getPlacementsFromLogical( table.id );
+                    for ( AllocationPlacement dp : dataPlacements ) {
+                        if ( dp.adapterId == adapterId ) {
+                            assertEquals( 2, Catalog.snapshot().alloc().getColumns( dp.id ).size() );
+                            //Assertions.assertEquals( 2, Catalog.snapshot().alloc().getColumnPlacementsOnAdapterPerEntity( adapterId, table.id ).size() );
+                            //Assertions.assertEquals( 2, Catalog.snapshot().alloc().getColumnPlacementsByAdapters( table.id ).get( adapterId ).size() );
+                            assertEquals( 1, Catalog.snapshot().alloc().getEntitiesOnAdapter( adapterId ).orElseThrow().size() );
+                        } else if ( dp.adapterId == initialAdapterId ) {
+                            assertEquals( 2, Catalog.snapshot().alloc().getColumns( dp.id ).size() );
+                            //Assertions.assertEquals( 2, Catalog.snapshot().alloc().getColumnPlacementsOnAdapterPerEntity( initialAdapterId, table.id ).size() );
+                            //Assertions.assertEquals( 2, Catalog.snapshot().alloc().getColumnPlacementsByAdapters( table.id ).get( initialAdapterId ).size() );
+                            assertEquals( 1, Catalog.snapshot().alloc().getEntitiesOnAdapter( adapterId ).orElseThrow().size() );
+                        }
+                    }
+
+                    // By executing the following statement, technically the column tprimary would not be present
+                    // on any DataPlacement anymore. Therefore, it has to fail and all placements should remain
+                    Assertions.assertThrows( PrismInterfaceServiceException.class,
+                            () -> statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" MODIFY PLACEMENT (tprimary) ON STORE hsqldb" )
+                    );
+
+                    // ADD single column on second storeId
+                    statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" MODIFY PLACEMENT ADD COLUMN tinteger ON STORE anotherstore" );
+                    dataPlacements = Catalog.snapshot().alloc().getPlacementsFromLogical( table.id );
+                    for ( AllocationPlacement dp : dataPlacements ) {
+                        if ( dp.adapterId == adapterId ) {
+                            assertEquals( 3, Catalog.snapshot().alloc().getColumns( dp.id ).size() );
+                            //Assertions.assertEquals( 3, Catalog.snapshot().alloc().getColumnPlacementsOnAdapterPerEntity( adapterId, table.id ).size() );
+                            //Assertions.assertEquals( 3, Catalog.snapshot().alloc().getColumnPlacementsByAdapters( table.id ).get( adapterId ).size() );
+                        } else if ( dp.adapterId == initialAdapterId ) {
+                            assertEquals( 2, Catalog.snapshot().alloc().getColumns( dp.id ).size() );
+                            //Assertions.assertEquals( 2, Catalog.snapshot().alloc().getColumnPlacementsOnAdapterPerEntity( initialAdapterId, table.id ).size() );
+                            //Assertions.assertEquals( 2, Catalog.snapshot().alloc().getColumnPlacementsByAdapters( table.id ).get( initialAdapterId ).size() );
+                        }
+                    }
+
+                    // MODIFY first storeId and adding a full placement again
+                    statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" MODIFY PLACEMENT (tprimary, tinteger, tvarchar) ON STORE hsqldb" );
+
+                    // REMOVE single column on second storeId
+                    statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" MODIFY PLACEMENT DROP COLUMN tvarchar ON STORE anotherstore" );
+                    dataPlacements = Catalog.snapshot().alloc().getPlacementsFromLogical( table.id );
+                    for ( AllocationPlacement dp : dataPlacements ) {
+                        if ( dp.adapterId == adapterId ) {
+                            assertEquals( 2, Catalog.snapshot().alloc().getColumns( dp.id ).size() );
+                            //Assertions.assertEquals( 2, Catalog.snapshot().alloc().getColumnPlacementsOnAdapterPerEntity( adapterId, table.id ).size() );
+                            //Assertions.assertEquals( 2, Catalog.snapshot().alloc().getColumnPlacementsByAdapters( table.id ).get( adapterId ).size() );
+                        } else if ( dp.adapterId == initialAdapterId ) {
+                            assertEquals( 3, Catalog.snapshot().alloc().getColumns( dp.id ).size() );
+                            //Assertions.assertEquals( 3, Catalog.snapshot().alloc().getColumnPlacementsOnAdapterPerEntity( initialAdapterId, table.id ).size() );
+                            //Assertions.assertEquals( 3, Catalog.snapshot().alloc().getColumnPlacementsByAdapters( table.id ).get( initialAdapterId ).size() );
+                        }
+                    }
+
+                    assertEquals( 2, dataPlacements.size() );
+                    // DROP STORE and verify number of dataPlacements
+                    statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" DROP PLACEMENT ON STORE \"anotherstore\"" );
+                    assertEquals( 1, Catalog.snapshot().alloc().getPlacementsFromLogical( table.id ).size() );
+
+                    //Check also if ColumnPlacements have been correctly removed
+                    //Assertions.assertEquals( 0, Catalog.snapshot().alloc().getColumnPlacementsOnAdapterPerEntity( adapterId, table.id ).size() );
+                } finally {
+                    // Drop tables and stores
+                    statement.executeUpdate( "DROP TABLE IF EXISTS verticalDataPlacementTest" );
+                    statement.executeUpdate( "ALTER ADAPTERS DROP anotherstore" );
+                }
+            }
+        }
+    }
+
+
+    @Test
+    public void dataDistributionTest() throws SQLException {
+        try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
+            Connection connection = polyphenyDbConnection.getConnection();
+
+            try ( Statement statement = connection.createStatement() ) {
+                statement.executeUpdate( "CREATE TABLE verticalDataPlacementTest( "
+                        + "tprimary INTEGER NOT NULL, "
+                        + "tinteger INTEGER NULL, "
+                        + "tvarchar VARCHAR(20) NULL, "
+                        + "PRIMARY KEY (tprimary) )" );
+
+                try {
+
+                    // ADD adapter
+                    statement.executeUpdate( "ALTER ADAPTERS ADD \"anotherstore\" USING 'Hsqldb' AS 'Store'"
+                            + " WITH '{maxConnections:\"25\",path:., trxControlMode:locks,trxIsolationLevel:read_committed,type:Memory,tableType:Memory,mode:embedded}'" );
+
+                    // ADD FullPlacement
+                    statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" ADD PLACEMENT ON STORE \"anotherstore\"" );
+
+                    statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" MODIFY PLACEMENT (tinteger) ON STORE anotherstore" );
+
+                    // By executing the following statement, technically the column tinteger would not be present
+                    // on any of the partitions of the placement anymore. Therefore, it has to fail and all placements should remain
+                    Assertions.assertThrows(
+                            PrismInterfaceServiceException.class,
+                            () -> statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" MODIFY PLACEMENT DROP COLUMN tvarchar ON STORE hsqldb" )
+                    );
+
+                    statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" MODIFY PLACEMENT (tprimary,tvarchar) ON STORE hsqldb" );
+
+                    Assertions.assertThrows(
+                            PrismInterfaceServiceException.class,
+                            () -> statement.executeUpdate( "ALTER TABLE \"verticalDataPlacementTest\" DROP PLACEMENT ON STORE anotherstore" )
+                    );
+
+                } finally {
+                    // Drop tables and stores
+                    statement.executeUpdate( "DROP TABLE IF EXISTS verticalDataPlacementTest" );
+                    statement.executeUpdate( "ALTER ADAPTERS DROP anotherstore" );
                 }
             }
         }

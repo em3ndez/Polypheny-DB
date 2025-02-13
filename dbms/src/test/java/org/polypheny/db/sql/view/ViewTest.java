@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,34 +21,31 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
 import lombok.extern.slf4j.Slf4j;
-import org.junit.BeforeClass;
-import org.junit.Ignore;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
-import org.polypheny.db.AdapterTestSuite;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.polypheny.db.TestHelper;
 import org.polypheny.db.TestHelper.JdbcConnection;
-import org.polypheny.db.excluded.CassandraExcluded;
 
 @SuppressWarnings({ "SqlDialectInspection", "SqlNoDataSourceInspection" })
 @Slf4j
-@Category({ AdapterTestSuite.class, CassandraExcluded.class })
+@Tag("adapter")
 public class ViewTest {
 
-    private final static String VIEWTESTEMPTABLE_SQL = "CREATE TABLE viewTestEmpTable ("
+    private final static String VIEW_TEST_EMP_TABLE_SQL = "CREATE TABLE viewTestEmpTable ("
             + "empId INTEGER NOT NULL,"
             + "firstName VARCHAR(20),"
             + "lastName VARCHAR(20),"
             + "depId INTEGER NOT NULL,"
             + "PRIMARY KEY (empId))";
 
-    private final static String VIEWTESTDEPTABLE_SQL = "CREATE TABLE viewTestDepTable ("
+    private final static String VIEW_TEST_DEP_TABLE_SQL = "CREATE TABLE viewTestDepTable ("
             + "depId INTEGER NOT NULL,"
             + "depName VARCHAR(20),"
             + "locationId INTEGER NOT NULL,"
             + "PRIMARY KEY (depId))";
 
-    private final static String VIEWTESTLOCTABLE_SQL = "CREATE TABLE viewTestLocTable ("
+    private final static String VIEW_TEST_LOC_TABLE_SQL = "CREATE TABLE viewTestLocTable ("
             + "locationId INTEGER NOT NULL,"
             + "address VARCHAR(20),"
             + "postcode INTEGER,"
@@ -56,23 +53,23 @@ public class ViewTest {
             + "country VARCHAR(20),"
             + "PRIMARY KEY (locationId))";
 
-    private final static String VIEWTESTEMPTABLE_DATA_SQL = "INSERT INTO viewTestEmpTable VALUES"
+    private final static String VIEW_TEST_EMP_TABLE_DATA_SQL = "INSERT INTO viewTestEmpTable VALUES"
             + " ( 1, 'Max', 'Muster', 1 ),"
             + "( 2, 'Ernst', 'Walter', 2),"
             + "( 3, 'Elsa', 'Kuster', 3 )";
 
-    private final static String VIEWTESTDEPTABLE_DATA_SQL = "INSERT INTO viewTestDepTable VALUES"
+    private final static String VIEW_TEST_DEP_TABLE_DATA_SQL = "INSERT INTO viewTestDepTable VALUES"
             + "( 1, 'IT', 1),"
             + "( 2, 'Sales', 2),"
             + "( 3, 'HR', 3)";
 
-    private final static String VIEWTESTLOCTABLE_DATA_SQL = "INSERT INTO viewTestLocTable VALUES"
+    private final static String VIEW_TEST_LOC_TABLE_DATA_SQL = "INSERT INTO viewTestLocTable VALUES"
             + "(1, 'Bergstrasse 15', 4058, 'Basel', 'Switzerland'),"
             + "(2, 'Waldstrasse 11', 99900, 'Singen', 'Germany'),"
             + "(3, '5th Avenue 1234', 10001, 'New York', 'USA') ";
 
 
-    @BeforeClass
+    @BeforeAll
     public static void start() {
         // Ensures that Polypheny-DB is running
         //noinspection ResultOfMethodCallIgnored
@@ -85,16 +82,16 @@ public class ViewTest {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
-                statement.executeUpdate( VIEWTESTEMPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTEMPTABLE_DATA_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_DATA_SQL );
 
                 try {
                     statement.executeUpdate( "CREATE VIEW viewTestEmp AS SELECT * FROM viewTestEmpTable" );
                     statement.executeUpdate( "CREATE VIEW viewTestEmpDep AS SELECT viewTestEmpTable.firstName, viewTestDepTable.depName FROM viewTestEmpTable INNER JOIN viewTestDepTable ON viewTestEmpTable.depId = viewTestDepTable.depId" );
                     TestHelper.checkResultSet(
-                            statement.executeQuery( "SELECT * FROM viewTestEmp" ),
+                            statement.executeQuery( "SELECT * FROM viewTestEmp ORDER BY empid" ),
                             ImmutableList.of(
                                     new Object[]{ 1, "Max", "Muster", 1 },
                                     new Object[]{ 2, "Ernst", "Walter", 2 },
@@ -102,11 +99,11 @@ public class ViewTest {
                             )
                     );
                     TestHelper.checkResultSet(
-                            statement.executeQuery( "SELECT viewTestEmp.firstName FROM viewTestEmp" ),
+                            statement.executeQuery( "SELECT viewTestEmp.firstName FROM viewTestEmp ORDER BY viewTestEmp.firstName" ),
                             ImmutableList.of(
-                                    new Object[]{ "Max" },
+                                    new Object[]{ "Elsa" },
                                     new Object[]{ "Ernst" },
-                                    new Object[]{ "Elsa" }
+                                    new Object[]{ "Max" }
                             )
                     );
                     TestHelper.checkResultSet(
@@ -115,7 +112,8 @@ public class ViewTest {
                                     new Object[]{ "Max", "IT" },
                                     new Object[]{ "Ernst", "Sales" },
                                     new Object[]{ "Elsa", "HR" }
-                            )
+                            ),
+                            true
                     );
                     connection.commit();
                 } finally {
@@ -134,8 +132,8 @@ public class ViewTest {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
-                statement.executeUpdate( VIEWTESTEMPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTEMPTABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_DATA_SQL );
 
                 try {
                     statement.executeUpdate( "CREATE VIEW viewTestEmp AS SELECT * FROM viewTestEmpTable" );
@@ -149,21 +147,24 @@ public class ViewTest {
                             ImmutableList.of(
                                     new Object[]{ 1 },
                                     new Object[]{ 2 },
-                                    new Object[]{ 3 } ) );
+                                    new Object[]{ 3 } ),
+                            true );
                     TestHelper.checkResultSet(
                             statement.executeQuery( "SELECT fName FROM viewTestEmp" ),
                             ImmutableList.of(
                                     new Object[]{ "Max" },
                                     new Object[]{ "Ernst" },
-                                    new Object[]{ "Elsa" } ) );
+                                    new Object[]{ "Elsa" } ),
+                            true );
                     TestHelper.checkResultSet(
                             statement.executeQuery( "SELECT lName FROM viewTestEmp" ),
                             ImmutableList.of(
+                                    new Object[]{ "Kuster" },
                                     new Object[]{ "Muster" },
-                                    new Object[]{ "Walter" },
-                                    new Object[]{ "Kuster" } ) );
+                                    new Object[]{ "Walter" } ),
+                            true );
                     TestHelper.checkResultSet(
-                            statement.executeQuery( "SELECT departmentId FROM viewTestEmp" ),
+                            statement.executeQuery( "SELECT departmentId FROM viewTestEmp ORDER BY departmentId" ),
                             ImmutableList.of(
                                     new Object[]{ 1 },
                                     new Object[]{ 2 },
@@ -184,10 +185,10 @@ public class ViewTest {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
-                statement.executeUpdate( VIEWTESTEMPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTEMPTABLE_DATA_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_DATA_SQL );
                 statement.executeUpdate( "CREATE VIEW viewTestEmp AS SELECT * FROM viewTestEmpTable" );
                 statement.executeUpdate( "CREATE VIEW viewTestDep AS SELECT * FROM viewTestDepTable" );
 
@@ -196,7 +197,7 @@ public class ViewTest {
                     statement.executeUpdate( "ALTER TABLE viewTestDep RENAME TO viewRenameDepTest" );
 
                     TestHelper.checkResultSet(
-                            statement.executeQuery( "SELECT * FROM viewRenameEmpTest" ),
+                            statement.executeQuery( "SELECT * FROM viewRenameEmpTest ORDER BY empid" ),
                             ImmutableList.of(
                                     new Object[]{ 1, "Max", "Muster", 1 },
                                     new Object[]{ 2, "Ernst", "Walter", 2 },
@@ -209,7 +210,8 @@ public class ViewTest {
                                     new Object[]{ 1, "IT", 1 },
                                     new Object[]{ 2, "Sales", 2 },
                                     new Object[]{ 3, "HR", 3 }
-                            )
+                            ),
+                            true
                     );
                     connection.commit();
                 } finally {
@@ -223,21 +225,19 @@ public class ViewTest {
     }
 
 
-    //SELECT not possible if inner Select with MAX()
-    @Ignore
     @Test
     public void selectAggregateInnerSelectTest() throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
-                statement.executeUpdate( VIEWTESTDEPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_DATA_SQL );
-                statement.executeUpdate( VIEWTESTLOCTABLE_SQL );
-                statement.executeUpdate( VIEWTESTLOCTABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_LOC_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_LOC_TABLE_DATA_SQL );
 
                 try {
                     TestHelper.checkResultSet(
-                            statement.executeQuery( "SELECT viewTestLocTable.postcode FROM viewTestLocTable, viewTestDepTable WHERE viewTestLocTable.postcode = (SELECT max(postcode) FROM viewTestLocTable)" ),
+                            statement.executeQuery( "SELECT viewTestLocTable.postcode FROM viewTestLocTable WHERE viewTestLocTable.postcode = (SELECT max(postcode) FROM viewTestLocTable)" ),
                             ImmutableList.of(
                                     new Object[]{ 99900 }
                             )
@@ -257,12 +257,12 @@ public class ViewTest {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
-                statement.executeUpdate( VIEWTESTEMPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTEMPTABLE_DATA_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_DATA_SQL );
-                statement.executeUpdate( VIEWTESTLOCTABLE_SQL );
-                statement.executeUpdate( VIEWTESTLOCTABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_LOC_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_LOC_TABLE_DATA_SQL );
 
                 statement.executeUpdate( "CREATE VIEW viewTestEmp AS SELECT * FROM viewTestEmpTable" );
                 statement.executeUpdate( "CREATE VIEW viewTestDep AS SELECT * FROM viewTestDepTable" );
@@ -309,15 +309,15 @@ public class ViewTest {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
-                statement.executeUpdate( VIEWTESTEMPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTEMPTABLE_DATA_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_DATA_SQL );
 
                 try {
                     statement.executeUpdate( "CREATE VIEW viewTestEmp AS SELECT * FROM viewTestEmpTable" );
                     TestHelper.checkResultSet(
-                            statement.executeQuery( "SELECT * FROM viewTestEmp, viewTestDepTable WHERE depname = 'IT'" ),
+                            statement.executeQuery( "SELECT * FROM viewTestEmp, viewTestDepTable WHERE depname = 'IT' ORDER BY empid" ),
                             ImmutableList.of(
                                     new Object[]{ 1, "Max", "Muster", 1, 1, "IT", 1 },
                                     new Object[]{ 2, "Ernst", "Walter", 2, 1, "IT", 1 },
@@ -341,10 +341,10 @@ public class ViewTest {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
-                statement.executeUpdate( VIEWTESTEMPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTEMPTABLE_DATA_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_DATA_SQL );
 
                 try {
                     statement.executeUpdate( "CREATE VIEW viewTestEmp AS SELECT * FROM viewTestEmpTable" );
@@ -355,7 +355,8 @@ public class ViewTest {
                                     new Object[]{ 1, "Max", "Muster", 1, 1, "IT", 1 },
                                     new Object[]{ 2, "Ernst", "Walter", 2, 1, "IT", 1 },
                                     new Object[]{ 3, "Elsa", "Kuster", 3, 1, "IT", 1 }
-                            )
+                            ),
+                            true
                     );
 
                     connection.commit();
@@ -371,14 +372,44 @@ public class ViewTest {
 
 
     @Test
+    public void simpleSelectViews() throws SQLException {
+        try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
+            Connection connection = polyphenyDbConnection.getConnection();
+            try ( Statement statement = connection.createStatement() ) {
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_DATA_SQL );
+
+                try {
+                    statement.executeUpdate( "CREATE VIEW viewTestEmp AS SELECT * FROM viewTestEmpTable" );
+                    TestHelper.checkResultSet(
+                            statement.executeQuery( "SELECT * FROM viewTestEmp" ),
+                            ImmutableList.of(
+                                    new Object[]{ 1, "Max", "Muster", 1 },
+                                    new Object[]{ 2, "Ernst", "Walter", 2 },
+                                    new Object[]{ 3, "Elsa", "Kuster", 3 }
+                            ),
+                            true
+                    );
+
+                    connection.commit();
+                } finally {
+                    statement.executeUpdate( "DROP VIEW viewTestEmp" );
+                    statement.executeUpdate( "DROP TABLE viewTestEmpTable" );
+                }
+            }
+        }
+    }
+
+
+    @Test
     public void testViewFromView() throws SQLException {
         try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( true ) ) {
             Connection connection = polyphenyDbConnection.getConnection();
             try ( Statement statement = connection.createStatement() ) {
-                statement.executeUpdate( VIEWTESTEMPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTEMPTABLE_DATA_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_SQL );
-                statement.executeUpdate( VIEWTESTDEPTABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_DATA_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_SQL );
+                statement.executeUpdate( VIEW_TEST_DEP_TABLE_DATA_SQL );
 
                 try {
                     statement.executeUpdate( "CREATE VIEW viewTestEmp AS SELECT * FROM viewTestEmpTable" );
@@ -390,7 +421,8 @@ public class ViewTest {
                                     new Object[]{ 1, "Max", "Muster", 1, 1, "IT", 1 },
                                     new Object[]{ 2, "Ernst", "Walter", 2, 1, "IT", 1 },
                                     new Object[]{ 3, "Elsa", "Kuster", 3, 1, "IT", 1 }
-                            )
+                            ),
+                            true
                     );
 
                     connection.commit();
@@ -400,6 +432,44 @@ public class ViewTest {
                     statement.executeUpdate( "DROP VIEW viewTestDep" );
                     statement.executeUpdate( "DROP TABLE viewTestEmpTable" );
                     statement.executeUpdate( "DROP TABLE viewTestDepTable" );
+                }
+            }
+        }
+    }
+
+
+    @Test
+    public void testViewRollback() throws SQLException {
+        try ( JdbcConnection polyphenyDbConnection = new JdbcConnection( false ) ) {
+            Connection connection = polyphenyDbConnection.getConnection();
+            try ( Statement statement = connection.createStatement() ) {
+                statement.executeUpdate( VIEW_TEST_EMP_TABLE_SQL );
+
+                try {
+                    statement.executeUpdate( "CREATE VIEW viewTestEmp AS SELECT * FROM viewTestEmpTable" );
+                    statement.executeUpdate( "CREATE VIEW viewTestEmp1 AS SELECT * FROM viewTestEmpTable" );
+
+                    statement.executeUpdate( VIEW_TEST_EMP_TABLE_DATA_SQL );
+                    // Rollback the catalog to test that views are correctly restored
+                    connection.rollback();
+
+                    statement.executeUpdate( VIEW_TEST_EMP_TABLE_DATA_SQL );
+                    connection.commit();
+
+                    TestHelper.checkResultSet(
+                            statement.executeQuery( "SELECT empId,firstName,lastName,depId FROM viewTestEmp ORDER BY empid" ),
+                            ImmutableList.of(
+                                    new Object[]{ 1, "Max", "Muster", 1 },
+                                    new Object[]{ 2, "Ernst", "Walter", 2 },
+                                    new Object[]{ 3, "Elsa", "Kuster", 3 }
+                            )
+                    );
+
+                    // Drop the materialized views
+                    statement.executeUpdate( "DROP VIEW viewTestEmp" );
+                    statement.executeUpdate( "DROP VIEW viewTestEmp1" );
+                } finally {
+                    statement.executeUpdate( "DROP TABLE viewTestEmpTable" );
                 }
             }
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,20 +16,25 @@
 
 package org.polypheny.db.adapter;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonSerializer;
 import java.util.List;
 import java.util.Map;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
+import org.pf4j.ExtensionPoint;
+import org.polypheny.db.catalog.catalogs.AdapterCatalog;
+import org.polypheny.db.catalog.entity.LogicalAdapter.AdapterType;
 import org.polypheny.db.type.PolyType;
 
-public abstract class DataSource extends Adapter {
+@Getter
+public abstract class DataSource<S extends AdapterCatalog> extends Adapter<S> implements ExtensionPoint {
 
-    @Getter
     private final boolean dataReadOnly;
 
 
-    protected DataSource( final int adapterId, final String uniqueName, final Map<String, String> settings, boolean dataReadOnly ) {
-        super( adapterId, uniqueName, settings );
+    protected DataSource( final long adapterId, final String uniqueName, final Map<String, String> settings, final DeployMode mode, boolean dataReadOnly, S catalog ) {
+        super( adapterId, uniqueName, settings, mode, catalog );
         this.dataReadOnly = dataReadOnly;
 
         informationPage.setLabel( "Sources" );
@@ -76,6 +81,27 @@ public abstract class DataSource extends Adapter {
             return typeStr;
         }
 
+    }
+
+
+    public static JsonSerializer<DataSource<?>> getSerializer() {
+        //see https://futurestud.io/tutorials/gson-advanced-custom-serialization-part-1
+        return ( src, typeOfSrc, context ) -> {
+            JsonObject jsonSource = new JsonObject();
+            jsonSource.addProperty( "adapterId", src.getAdapterId() );
+            jsonSource.addProperty( "uniqueName", src.getUniqueName() );
+            jsonSource.addProperty( "adapterName", src.getAdapterName() );
+            jsonSource.add( "adapterSettings", context.serialize( AbstractAdapterSetting.serializeSettings( src.getAvailableSettings( src.getClass() ), src.getCurrentSettings() ) ) );
+            jsonSource.add( "settings", context.serialize( src.getCurrentSettings() ) );
+            jsonSource.add( "dataReadOnly", context.serialize( src.isDataReadOnly() ) );
+            jsonSource.addProperty( "type", src.getAdapterType().name() );
+            return jsonSource;
+        };
+    }
+
+
+    private AdapterType getAdapterType() {
+        return AdapterType.SOURCE;
     }
 
 }

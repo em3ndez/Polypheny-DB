@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2025 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,20 +16,45 @@
 
 package org.polypheny.db.webui;
 
-
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
+import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import io.javalin.Javalin;
+import io.javalin.http.Context;
+import io.javalin.http.staticfiles.Location;
+import io.javalin.plugin.json.JavalinJackson;
+import io.javalin.websocket.WsConfig;
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.SocketException;
+import java.net.URL;
 import java.nio.charset.Charset;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
+import org.polypheny.db.StatusNotificationService;
+import org.polypheny.db.catalog.exceptions.GenericRuntimeException;
 import org.polypheny.db.config.RuntimeConfig;
 import org.polypheny.db.iface.Authenticator;
 import org.polypheny.db.transaction.TransactionManager;
-import spark.Service;
+import org.polypheny.db.util.PolyphenyHomeDirManager;
+import org.polypheny.db.webui.ConfigService.Consumer3;
+import org.polypheny.db.webui.ConfigService.HandlerType;
+import org.polypheny.db.webui.crud.LanguageCrud;
+import org.polypheny.db.webui.models.results.RelationalResult;
 
 
 /**
@@ -41,142 +66,256 @@ public class HttpServer implements Runnable {
     private final TransactionManager transactionManager;
     private final Authenticator authenticator;
 
-    private final Gson gson = new Gson();
-    private final Gson gsonExpose = new GsonBuilder()
-            .excludeFieldsWithoutExposeAnnotation()
-            .enableComplexMapKeySerialization()
-            .setPrettyPrinting()
-            .create();
+    private static HttpServer INSTANCE = null;
+    @Getter
+    private WebSocket webSocketHandler;
+    @Setter
+    private boolean isReady = false;
 
 
-    public HttpServer( final TransactionManager transactionManager, final Authenticator authenticator ) {
-        this.transactionManager = transactionManager;
+    public static HttpServer getInstance() {
+        if ( INSTANCE == null ) {
+            throw new GenericRuntimeException( "HttpServer is not yet created." );
+        }
+        return INSTANCE;
+    }
+
+
+    public static final ObjectMapper mapper = new ObjectMapper() {
+        {
+            setSerializationInclusion( JsonInclude.Include.NON_NULL );
+            configure( DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false );
+            setVisibility( getSerializationConfig().getDefaultVisibilityChecker()
+                    .withIsGetterVisibility( Visibility.NONE )
+                    .withGetterVisibility( Visibility.NONE )
+                    .withSetterVisibility( Visibility.NONE ) );
+            configure( SerializationFeature.FAIL_ON_EMPTY_BEANS, false );
+            writerWithDefaultPrettyPrinter();
+        }
+    };
+
+    @Getter
+    private final Javalin server = Javalin.create( config -> {
+        File finalUi = handleUiFiles();
+
+        config.jsonMapper( new JavalinJackson( mapper ) );
+        config.enableCorsForAllOrigins();
+        config.addStaticFiles( staticFileConfig -> {
+            staticFileConfig.directory = finalUi.getAbsolutePath();
+            staticFileConfig.location = Location.EXTERNAL;
+            staticFileConfig.hostedPath = "/";
+        } );
+    } ).start( RuntimeConfig.WEBUI_SERVER_PORT.getInteger() );
+
+
+    private @NotNull File handleUiFiles() {
+        File uiPath = PolyphenyHomeDirManager.getInstance().registerNewFolder( "ui" );
+        if ( uiPath.delete() ) {
+            uiPath = PolyphenyHomeDirManager.getInstance().registerNewFolder( "ui" );
+        }
+
+        URL uiResourceUrl = getClass().getClassLoader().getResource( "polypheny-ui.zip" );
+        if ( uiResourceUrl == null ) {
+            log.warn( "No UI resources found" );
+            return uiPath;
+        }
+
+        File uiZip = copyResourceToTempFile( uiResourceUrl, "polypheny-ui", ".zip" );
+
+        PolyphenyHomeDirManager.getInstance().unzipInto( uiZip, uiPath );
+
+        Optional<File> globalUiPath = PolyphenyHomeDirManager.getInstance().getGlobalFile( "ui" );
+
+        if ( globalUiPath.isPresent() && globalUiPath.get().isDirectory() && Objects.requireNonNull( globalUiPath.get().list() ).length != 0 ) {
+            log.info( "Using global UI path: {}", globalUiPath.get().getAbsolutePath() );
+            uiPath = globalUiPath.get();
+        }
+        if ( !PolyphenyHomeDirManager.getInstance().isAccessible( uiPath ) ) {
+            log.warn( "Cannot read ui files!" );
+        }
+
+        return uiPath;
+    }
+
+
+    private Crud crud;
+
+
+    public HttpServer( TransactionManager manager, final Authenticator authenticator ) {
+        this.transactionManager = manager;
         this.authenticator = authenticator;
     }
 
 
     @Override
     public void run() {
-        final Service server = Service.ignite();
-        server.port( RuntimeConfig.WEBUI_SERVER_PORT.getInteger() );
-        Crud crud = new Crud( transactionManager, "pa", "APP" );
+        this.crud = new Crud( this.transactionManager );
 
-        WebSocket webSocketHandler = new WebSocket( crud );
-        webSockets( server, webSocketHandler );
+        this.webSocketHandler = new WebSocket( crud );
+        webSockets( server, this.webSocketHandler );
 
-        server.staticFiles.location( "webapp/" );
-
-        enableCORS( server );
-
-        // get modified index.html
-        server.get( "/", ( req, res ) -> {
-            res.type( "text/html" );
-            try ( InputStream stream = this.getClass().getClassLoader().getResource( "index/index.html" ).openStream() ) {
-                return streamToString( stream );
-            } catch ( NullPointerException e ) {
-                return "Error: Spark server could not find index.html";
-            } catch ( SocketException e ) {
-                return "Error: Spark server could not determine its ip address.";
-            }
+        // Log all requests
+        server.before( ctx -> {
+            log.debug( "Request: {} {}", ctx.method(), ctx.path() );
         } );
 
-        crudRoutes( server, crud );
+        attachRoutes( server, crud );
 
-        log.info( "Polypheny-UI started and is listening on port {}.", RuntimeConfig.WEBUI_SERVER_PORT.getInteger() );
+        StatusNotificationService.printInfo(
+                String.format( "Polypheny-UI started and is listening on port %d.", RuntimeConfig.WEBUI_SERVER_PORT.getInteger() ) );
+
+        attachExceptions( server );
+        INSTANCE = this;
+    }
+
+
+    private File copyResourceToTempFile( URL resourceUrl, String name, String extension ) {
+        try {
+            File tempFile = File.createTempFile( name, extension );
+
+            tempFile.deleteOnExit();
+
+            try ( InputStream inputStream = resourceUrl.openStream();
+                    OutputStream outputStream = new FileOutputStream( tempFile ) ) {
+
+                byte[] buffer = new byte[1024];
+                int bytesRead;
+
+                while ( (bytesRead = inputStream.read( buffer )) != -1 ) {
+                    outputStream.write( buffer, 0, bytesRead );
+                }
+            }
+
+            return tempFile;
+        } catch ( IOException e ) {
+            throw new RuntimeException( e );
+        }
+    }
+
+
+    public Consumer3<String, Consumer<Context>, HandlerType> getRouteRegisterer() {
+        return this::addSerializedRoute;
+    }
+
+
+    public BiConsumer<String, Consumer<WsConfig>> getWebSocketRegisterer() {
+        return this::addWebsocketRoute;
+    }
+
+
+    private void attachExceptions( Javalin server ) {
+        server.exception( SocketException.class, ( e, ctx ) -> {
+            ctx.status( 400 ).result( "Error: Could not determine IP address." );
+        } );
+
+        defaultException( IOException.class, server );
+    }
+
+
+    private void defaultException( Class<? extends Exception> exceptionClass, Javalin server ) {
+        server.exception( exceptionClass, ( e, ctx ) -> {
+            ctx.status( 400 ).json( RelationalResult.builder().error( e.getMessage() ).build() );
+        } );
     }
 
 
     /**
-     * Defines the routes for this Server
+     * Defines the routes for this server
      */
-    private void crudRoutes( Service webuiServer, Crud crud ) {
-        webuiServer.post( "/getSchemaTree", crud::getSchemaTree, gson::toJson );
+    private void attachRoutes( Javalin webuiServer, Crud crud ) {
+        attachCatalogMetaRoutes( webuiServer, crud );
 
-        webuiServer.post( "/insertRow", "multipart/form-data", crud::insertRow, gson::toJson );
+        attachPartnerRoutes( webuiServer, crud );
 
-        webuiServer.post( "/deleteRow", crud::deleteRow, gson::toJson );
+        attachStatisticRoutes( webuiServer, crud );
 
-        webuiServer.post( "/updateRow", "multipart/form-data", crud::updateRow, gson::toJson );
+        attachPluginRoutes( webuiServer, crud );
 
-        webuiServer.post( "/batchUpdate", "multipart/form-data", crud::batchUpdate, gson::toJson );
+        attachDockerRoutes( webuiServer, crud );
 
-        webuiServer.post( "/classifyData", crud::classifyData, gson::toJson );
+        webuiServer.post( "/anyQuery", LanguageCrud::anyQuery );
 
-        webuiServer.post( "/getExploreTables", crud::getExploreTables, gson::toJson );
+        webuiServer.post( "/insertTuple", crud::insertTuple );
 
-        webuiServer.post( "/createInitialExploreQuery", crud::createInitialExploreQuery, gson::toJson );
+        webuiServer.post( "/deleteTuple", crud::deleteTuple );
 
-        webuiServer.post( "/exploration", crud::exploration, gson::toJson );
+        webuiServer.post( "/updateTuple", crud::updateTuple );
 
-        webuiServer.post( "/allStatistics", crud::getStatistics, gsonExpose::toJson );
+        webuiServer.post( "/batchUpdate", crud::batchUpdate );
 
-        webuiServer.post( "/getColumns", crud::getColumns, gson::toJson );
+        webuiServer.post( "/getColumns", crud::getColumns );
 
-        webuiServer.post( "/getDataSourceColumns", crud::getDataSourceColumns, gson::toJson );
+        webuiServer.post( "/getDataSourceColumns", crud::getDataSourceColumns );
 
-        webuiServer.post( "/getExportedColumns", crud::getExportedColumns, gson::toJson );
+        webuiServer.post( "/getAvailableSourceColumns", crud::getAvailableSourceColumns );
 
-        webuiServer.post( "/updateColumn", crud::updateColumn, gson::toJson );
+        webuiServer.post( "/updateColumn", crud::updateColumn );
 
-        webuiServer.post( "/addColumn", crud::addColumn, gson::toJson );
+        webuiServer.post( "/getMaterializedInfo", crud::getMaterializedInfo );
 
-        webuiServer.post( "/dropColumn", crud::dropColumn, gson::toJson );
+        webuiServer.post( "/updateMaterialized", crud::updateMaterialized );
 
-        webuiServer.post( "/getTables", crud::getTables, gson::toJson );
+        webuiServer.post( "/createColumn", crud::addColumn );
 
-        webuiServer.post( "/renameTable", crud::renameTable, gson::toJson );
+        webuiServer.post( "/dropColumn", crud::dropColumn );
 
-        webuiServer.post( "/dropTruncateTable", crud::dropTruncateTable, gson::toJson );
+        webuiServer.post( "/getEntities", crud::getEntities );
 
-        webuiServer.post( "/createTable", crud::createTable, gson::toJson );
+        webuiServer.post( "/renameTable", crud::renameTable );
 
-        webuiServer.get( "/getGeneratedNames", crud::getGeneratedNames, gson::toJson );
+        webuiServer.post( "/dropTruncateTable", crud::dropTruncateTable );
 
-        webuiServer.post( "/getConstraints", crud::getConstraints, gson::toJson );
+        webuiServer.post( "/createTable", crud::createTable );
 
-        webuiServer.post( "/dropConstraint", crud::dropConstraint, gson::toJson );
+        webuiServer.get( "/getGeneratedNames", crud::getGeneratedNames );
 
-        webuiServer.post( "/addPrimaryKey", crud::addPrimaryKey, gson::toJson );
+        webuiServer.post( "/getConstraints", crud::getConstraints );
 
-        webuiServer.post( "/addUniqueConstraint", crud::addUniqueConstraint, gson::toJson );
+        webuiServer.post( "/dropConstraint", crud::dropConstraint );
 
-        webuiServer.post( "/getIndexes", crud::getIndexes, gson::toJson );
+        webuiServer.post( "/createPrimaryKey", crud::addPrimaryKey );
 
-        webuiServer.post( "/dropIndex", crud::dropIndex, gson::toJson );
+        webuiServer.post( "/createUniqueConstraint", crud::addUniqueConstraint );
 
-        webuiServer.post( "/getUml", crud::getUml, gson::toJson );
+        webuiServer.post( "/getIndexes", crud::getIndexes );
 
-        webuiServer.post( "/addForeignKey", crud::addForeignKey, gson::toJson );
+        webuiServer.post( "/dropIndex", crud::dropIndex );
 
-        webuiServer.post( "/createIndex", crud::createIndex, gson::toJson );
+        webuiServer.post( "/getUml", crud::getUml );
 
-        webuiServer.post( "/getUnderlyingTable", crud::getUnderlyingTable, gson::toJson );
+        webuiServer.post( "/createForeignKey", crud::addForeignKey );
 
-        webuiServer.post( "/getPlacements", crud::getPlacements, gson::toJson );
+        webuiServer.post( "/createIndex", crud::createIndex );
 
-        webuiServer.post( "/addDropPlacement", crud::addDropPlacement, gson::toJson );
+        webuiServer.post( "/getUnderlyingTable", crud::getUnderlyingTable );
+
+        webuiServer.post( "/getPlacements", crud::getPlacements );
+
+        webuiServer.post( "/getGraphPlacements", crud.languageCrud::getGraphPlacements );
+
+        webuiServer.post( "/getFixedFields", crud.languageCrud::getFixedFields );
+
+        webuiServer.post( "/getCollectionPlacements", crud.languageCrud::getCollectionPlacements );
+
+        webuiServer.post( "/addDropPlacement", crud::addDropPlacement );
 
         webuiServer.get( "/getPartitionTypes", crud::getPartitionTypes );
 
-        webuiServer.post( "/getPartitionFunctionModel", crud::getPartitionFunctionModel, gson::toJson );
+        webuiServer.post( "/getPartitionFunctionModel", crud::getPartitionFunctionModel );
 
-        webuiServer.post( "/partitionTable", crud::partitionTable, gson::toJson );
+        webuiServer.post( "/partitionTable", crud::partitionTable );
 
-        webuiServer.post( "/mergePartitions", crud::mergePartitions, gson::toJson );
+        webuiServer.post( "/mergePartitions", crud::mergePartitions );
 
-        webuiServer.post( "/modifyPartitions", crud::modifyPartitions, gson::toJson );
+        webuiServer.post( "/modifyPartitions", crud::modifyPartitions );
 
         webuiServer.post( "/getAnalyzerPage", crud::getAnalyzerPage );
 
-        webuiServer.post( "/schemaRequest", crud::schemaRequest, gson::toJson );
+        webuiServer.post( "/namespaceRequest", crud::namespaceRequest );
 
         webuiServer.get( "/getTypeInfo", crud::getTypeInfo );
 
-        webuiServer.get( "/getForeignKeyActions", crud::getForeignKeyActions, gson::toJson );
-
-        webuiServer.post( "/importDataset", crud::importDataset, gson::toJson );
-
-        webuiServer.post( "/exportTable", crud::exportTable, gson::toJson );
+        webuiServer.get( "/getForeignKeyActions", crud::getForeignKeyActions );
 
         webuiServer.get( "/getStores", crud::getStores );
 
@@ -184,32 +323,152 @@ public class HttpServer implements Runnable {
 
         webuiServer.post( "/getAvailableStoresForIndexes", crud::getAvailableStoresForIndexes );
 
-        webuiServer.post( "/removeAdapter", crud::removeAdapter, gson::toJson );
+        webuiServer.post( "/removeAdapter", crud::removeAdapter );
 
-        webuiServer.post( "/updateAdapterSettings", crud::updateAdapterSettings, gson::toJson );
+        webuiServer.post( "/updateAdapterSettings", crud::updateAdapterSettings );
 
         webuiServer.get( "/getAvailableStores", crud::getAvailableStores );
 
         webuiServer.get( "/getAvailableSources", crud::getAvailableSources );
 
-        webuiServer.post( "/addAdapter", crud::addAdapter, gson::toJson );
+        webuiServer.post( "/createAdapter", crud::createAdapter );
+
+        webuiServer.post( "/pathAccess", crud::startAccessRequest );
 
         webuiServer.get( "/getQueryInterfaces", crud::getQueryInterfaces );
 
         webuiServer.get( "/getAvailableQueryInterfaces", crud::getAvailableQueryInterfaces );
 
-        webuiServer.post( "/addQueryInterface", crud::addQueryInterface, gson::toJson );
+        webuiServer.post( "/createQueryInterface", crud::createQueryInterface );
 
-        webuiServer.post( "/updateQueryInterfaceSettings", crud::updateQueryInterfaceSettings, gson::toJson );
+        webuiServer.post( "/updateQueryInterfaceSettings", crud::updateQueryInterfaceSettings );
 
-        webuiServer.post( "/removeQueryInterface", crud::removeQueryInterface, gson::toJson );
+        webuiServer.post( "/removeQueryInterface", crud::removeQueryInterface );
 
-        webuiServer.get( "/getFile/:file", crud::getFile );
+        webuiServer.get( "/getFile/{file}", crud::getFile );
 
-        webuiServer.get( "/testDockerInstance/:dockerId", crud::testDockerInstance );
+        webuiServer.get( "/catalog.json", crud::getCatalog );
 
-        webuiServer.get( "/usedDockerPorts", crud::getUsedDockerPorts, gsonExpose::toJson );
+        webuiServer.get( "/getDocumentDatabases", crud.languageCrud::getDocumentDatabases );
 
+        webuiServer.get( "/product", ctx -> ctx.result( "Polypheny-DB" ) );
+
+        webuiServer.get( "/getPolyAlgRegistry", crud::getPolyAlgRegistry );
+
+        webuiServer.post( "/buildPolyPlan", crud::buildPlanFromPolyAlg );
+
+        webuiServer.get( "/isReady", ctx -> ctx.result( String.valueOf( isReady ) ) );
+
+    }
+
+
+    private static void attachDockerRoutes( Javalin webuiServer, Crud crud ) {
+        webuiServer.post( "/docker/instances/create", crud::createDockerInstance );
+
+        webuiServer.get( "/docker/instances", crud::getDockerInstances );
+
+        webuiServer.get( "/docker/instances/{dockerId}", crud::getDockerInstance );
+
+        webuiServer.patch( "/docker/instances/{dockerId}", crud::updateDockerInstance );
+
+        webuiServer.post( "/docker/instances/{dockerId}/reconnect", crud::reconnectToDockerInstance );
+
+        webuiServer.post( "/docker/instances/{dockerId}/ping", crud::pingDockerInstance );
+
+        webuiServer.delete( "/docker/instances/{dockerId}", crud::deleteDockerInstance );
+
+        webuiServer.get( "/docker/auto", crud::getAutoDockerStatus );
+
+        webuiServer.post( "/docker/auto", crud::doAutoHandshake );
+
+        webuiServer.get( "/docker/handshakes", crud::getHandshakes );
+
+        webuiServer.get( "/docker/handshakes/{id}", crud::getHandshake );
+
+        webuiServer.post( "/docker/handshakes/{id}/restart", crud::restartHandshake );
+
+        webuiServer.post( "/docker/handshakes/{id}/cancel", crud::cancelHandshake );
+
+        webuiServer.delete( "/docker/handshakes/{id}", crud::deleteHandshake );
+
+        webuiServer.get( "/docker/settings", crud::getDockerSettings );
+
+        webuiServer.patch( "/docker/settings", crud::updateDockerSettings );
+    }
+
+
+    private static void attachPluginRoutes( Javalin webuiServer, Crud crud ) {
+        webuiServer.post( "/loadPlugins", crud::loadPlugins );
+
+        webuiServer.post( "/unloadPlugin", crud::unloadPlugin );
+
+        webuiServer.get( "/getAvailablePlugins", crud::getAvailablePlugins );
+    }
+
+
+    private static void attachStatisticRoutes( Javalin webuiServer, Crud crud ) {
+        webuiServer.post( "/allStatistics", crud.statisticCrud::getStatistics );
+
+        webuiServer.post( "/getTableStatistics", crud.statisticCrud::getTableStatistics );
+
+        webuiServer.post( "/getDashboardInformation", crud.statisticCrud::getDashboardInformation );
+
+        webuiServer.post( "/getDashboardDiagram", crud.statisticCrud::getDashboardDiagram );
+    }
+
+
+    private static void attachPartnerRoutes( Javalin webuiServer, Crud crud ) {
+        webuiServer.get( "/auth/deregister", crud.authCrud::deregister );
+    }
+
+
+    private static void attachCatalogMetaRoutes( Javalin webuiServer, Crud crud ) {
+        webuiServer.post( "/getSchemaTree", crud.catalogCrud::getSchemaTree );
+
+        webuiServer.post( "/getSnapshot", crud.catalogCrud::getSnapshot );
+
+        webuiServer.get( "/getTypeSchemas", crud.catalogCrud::getTypeNamespaces );
+
+        webuiServer.post( "/getNamespaces", crud.catalogCrud::getNamespaces );
+
+        webuiServer.get( "/getCurrentSnapshot", crud.catalogCrud::getCurrentSnapshot );
+
+        webuiServer.get( "/getAssetsDefinition", crud.catalogCrud::getAssetsDefinition );
+
+        webuiServer.get( "/getAlgebraNodes", crud.catalogCrud::getAlgebraNodes );
+    }
+
+
+    public void addSerializedRoute( String route, BiConsumer<Context, Crud> action, HandlerType type ) {
+        addSerializedRoute( route, r -> action.accept( r, crud ), type );
+    }
+
+
+    public void addSerializedRoute( String route, Consumer<Context> action, HandlerType type ) {
+        log.debug( "Added route: {}", route );
+        switch ( type ) {
+            case GET:
+                server.get( route, action::accept );
+                break;
+            case POST:
+                server.post( route, action::accept );
+                break;
+            case PUT:
+                server.put( route, action::accept );
+                break;
+            case DELETE:
+                server.delete( route, action::accept );
+                break;
+            case PATCH:
+                server.patch( route, action::accept );
+                break;
+        }
+    }
+
+
+    public <T> void addRoute( String route, BiFunction<T, Crud, Object> action, Class<T> requestClass, HandlerType type ) {
+        BiConsumer<Context, Crud> func = ( r, c ) -> r.json( action.apply( r.bodyAsClass( requestClass ), crud ) );
+        addSerializedRoute( route, func, type );
     }
 
 
@@ -241,39 +500,19 @@ public class HttpServer implements Runnable {
     /**
      * Define websocket paths
      */
-    private void webSockets( Service webuiServer, WebSocket webSocketHandler ) {
-        webuiServer.webSocket( "/webSocket", webSocketHandler );
+    private void webSockets( Javalin webuiServer, Consumer<WsConfig> handler ) {
+        webuiServer.ws( "/webSocket", handler );
     }
 
 
-    /**
-     * To avoid the CORS problem, when the ConfigServer receives requests from the Web UI.
-     * See https://gist.github.com/saeidzebardast/e375b7d17be3e0f4dddf
-     */
-    private static void enableCORS( Service webuiServer ) {
-        //staticFiles.header("Access-Control-Allow-Origin", "*");
-
-        webuiServer.options( "/*", ( req, res ) -> {
-            String accessControlRequestHeaders = req.headers( "Access-Control-Request-Headers" );
-            if ( accessControlRequestHeaders != null ) {
-                res.header( "Access-Control-Allow-Headers", accessControlRequestHeaders );
-            }
-
-            String accessControlRequestMethod = req.headers( "Access-Control-Request-Method" );
-            if ( accessControlRequestMethod != null ) {
-                res.header( "Access-Control-Allow-Methods", accessControlRequestMethod );
-            }
-
-            return "OK";
-        } );
-
-        webuiServer.before( ( req, res ) -> {
-            //res.header("Access-Control-Allow-Origin", "*");
-            res.header( "Access-Control-Allow-Origin", "*" );
-            res.header( "Access-Control-Allow-Credentials", "true" );
-            res.header( "Access-Control-Allow-Headers", "*" );
-            res.type( "application/json" );
-        } );
+    public void addWebsocketRoute( String route, Consumer<WsConfig> handler ) {
+        server.ws( route, handler );
     }
+
+
+    public void removeRoute( String route, HandlerType type ) {
+        addRoute( route, ( ctx, crud ) -> null, Object.class, type );
+    }
+
 
 }

@@ -1,26 +1,34 @@
-import ca.coglinc.gradle.plugins.javacc.CompileJavaccTask
-
-group "org.polypheny"
-
-version = versionMajor + "." + versionMinor + versionQualifier
-
-
-configurations {
-    javacc
-    tests {
-        extendsFrom testRuntime
-    }
-}
-
+import org.javacc.plugin.gradle.javacc.CompileJavaccTask
 
 buildscript {
     dependencies {
-        // JavaCC (https://github.com/johnmartel/javaccPlugin)
-        classpath group: "gradle.plugin.ca.coglinc2", name: "javacc-gradle-plugin", version: javacc_plugin_version
-        // Fmpp
-        classpath group: "net.sourceforge.fmpp", name: "fmpp", version: fmpp_plugin_version
+        // Protobuf
+        classpath group: "com.google.protobuf", name: "protobuf-gradle-plugin", version: protobuf_plugin_version
     }
-    ant.taskdef(name: "fmpp", classname:"fmpp.tools.AntTask", classpath: buildscript.configurations.classpath.asPath)
+}
+
+plugins {
+    id "org.javacc.javacc" version "$javacc_plugin_version"
+}
+
+group "org.polypheny"
+
+
+apply plugin: "io.freefair.lombok"
+apply plugin: "com.google.protobuf"
+
+
+configurations {
+    //javacc
+    tests {
+        extendsFrom testRuntimeOnly
+    }
+    testClasses {
+        extendsFrom testImplementation
+    }
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
 }
 
 
@@ -28,60 +36,72 @@ dependencies {
     api project(":config")
     api project(":information")
 
-    javacc group: "net.java.dev.javacc", name: "javacc", version: javacc_version  // BSD 2-clause
-
-    api group: "org.slf4j", name: "slf4j-api", version: slf4j_api_version  // MIT
-
-    api group: "org.apache.commons", name: "commons-dbcp2", version: commons_dbcp2_version  // Apache 2.0
+    implementation group: "org.pf4j", name: "pf4j", version: pf4j_version
+    implementation group: "commons-codec", name: "commons-codec", version: commons_codec_version  // Apache 2.0
     api group: "org.apache.commons", name: "commons-lang3", version: commons_lang3_version  // Apache 2.0
-    implementation group: 'commons-codec', name: 'commons-codec', version: commons_codec_version  // Apache 2.0
 
     api group: "com.google.guava", name: "guava", version: guava_version
-    api group: "org.reflections", name: "reflections", version: reflections_version  // BSD 2-clause
     api group: "com.google.code.gson", name: "gson", version: gson_version  // Apache 2.0
     implementation group: "com.esri.geometry", name: "esri-geometry-api", version: esri_geometry_api_version  // Apache 2.0
     api group: "com.fasterxml.jackson.core", name: "jackson-core", version: jackson_core_version  // Apache 2.0
-    api group: "com.fasterxml.jackson.core", name: "jackson-annotations", version: jackson_annotations_version  // Apache 2.0
     api group: "com.fasterxml.jackson.core", name: "jackson-databind", version: jackson_databind_version  // Apache 2.0
-    api group: "com.fasterxml.jackson.dataformat", name: "jackson-dataformat-yaml", version: jackson_dataformat_yaml_version  // Apache 2.0
     api group: "com.google.code.findbugs", name: "jsr305", version: jsr305_version  // Apache 2.0
-    implementation group: "com.yahoo.datasketches", name: "sketches-core", version: sketches_core_version  // Apache 2.0
-    implementation(group: "com.jayway.jsonpath", name: "json-path", version: json_path_version) { exclude(module: "json-smart"); exclude(group: "org.slf4j") }  // Apache 2.0
-    api group: "net.hydromatic", name: "aggdesigner-algorithm", version: aggdesigner_algorithm_version  // Apache 2.0
+    implementation group: "com.jayway.jsonpath", name: "json-path", version: json_path_version // Apache 2.0
     implementation group: "org.codehaus.janino", name: "janino", version: janino_version  // BSD
     implementation group: "org.codehaus.janino", name: "commons-compiler", version: commons_compiler_version  // BSD
-    implementation group: 'com.j256.simplemagic', name: 'simplemagic', version: simplemagic_version // ISC
+    implementation group: "com.j256.simplemagic", name: "simplemagic", version: simplemagic_version // ISC
 
-    api (group: "org.apache.calcite", name: "calcite-linq4j", version: calcite_linq4j_version) { exclude(module: "guava") } // Apache 2.0
-    api (group: "org.apache.calcite.avatica", name: "avatica-core", version: avatica_core_version) { exclude(module: "protobuf-java") } // Apache 2.0
+    api(group: "org.apache.calcite", name: "calcite-linq4j", version: calcite_linq4j_version) {
+        exclude(module: "guava")
+    } // Apache 2.0
 
     implementation group: "com.drewnoakes", name: "metadata-extractor", version: metadata_extractor_version // Apache 2.0
 
-    // https://github.com/docker-java/docker-java
-    implementation group: 'com.github.docker-java', name: 'docker-java', version: java_docker_version // Apache 2.0
-    implementation group: 'com.github.docker-java', name: 'docker-java-transport-httpclient5', version: java_docker_version //TODO: should probably be independent version in future
+    implementation group: "org.mongodb", name: "mongodb-driver-sync", version: mongodb_driver_sync_version  // Apache 2.0
+
+    // For Docker integration
+    implementation group: "org.bouncycastle", name: "bcprov-jdk18on", version: bouncycastle_version // MIT
+    implementation group: "org.bouncycastle", name: "bctls-jdk18on", version: bouncycastle_version // MIT
+    implementation group: "org.bouncycastle", name: "bcpkix-jdk18on", version: bouncycastle_version // MIT
+    implementation group: "com.google.protobuf", name: "protobuf-java", version: protobuf_version // BSD 3-clause
+    implementation group: "com.github.docker-java", name: "docker-java", version: java_docker_version // Apache 2.0
+    implementation group: "com.github.docker-java", name: "docker-java-transport-httpclient5", version: java_docker_version // TODO: should probably be independent version in future
+
+    api group: "io.activej", name: "activej-serializer", version: activej_serializer_version
+
+
+    javacc group: "net.java.dev.javacc", name: "javacc", version: javacc_version  // BSD 2-clause
+    // GIS
+    api group: "org.locationtech.jts", name: "jts-core", version: jts_version // Eclipse Public License 2.0 && Eclipse Distribution License 1.0 (BSD-3 Clause)
+    api group: "org.locationtech.jts.io", name: "jts-io-common", version: jts_version // Eclipse Public License 2.0 && Eclipse Distribution License 1.0 (BSD-3 Clause)
+    api group: "org.locationtech.proj4j", name: "proj4j", version: proj4j_version // Apache 2.0
+    api group: "org.locationtech.proj4j", name: "proj4j-epsg", version: proj4j_version // Apache 2.0
 
     // --- Test Compile ---
-    testImplementation group: "junit", name: "junit", version: junit_version
+    testImplementation group: 'org.junit.jupiter', name: 'junit-jupiter', version: junit_jupiter_version
+    testRuntimeOnly(group: 'org.junit.jupiter', name: 'junit-jupiter-engine', version: junit_jupiter_version)
     testImplementation group: "org.hamcrest", name: "hamcrest-core", version: hamcrest_core_version  // BSD 3-clause
+}
 
-    testImplementation group: "org.apache.calcite.avatica", name: "avatica-server", version: avatica_server_version  // Apache 2.0
-    testImplementation group: "org.incava", name: "java-diff", version: java_diff_version  // Apache 2.0
-    testImplementation group: "org.apache.commons", name: "commons-pool2", version: commons_pool2_version // Apache 2.0
 
-    //testImplementation group: "org.apache.calcite", name: "calcite-linq4j", version: calcite_linq4j_version  // Apache 2.0
-    //testImplementation group: "com.h2database", name: "h2", version: h2_version
-    //testImplementation group: "mysql", name: "mysql-connector-java", version: mysql_connector_java_version
-    //testImplementation group: "org.hsqldb", name: "hsqldb", version: hsqldb_version
-    //testImplementation group: "org.postgresql", name: "postgresql", version: postgresql_version
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:$protobuf_version"
+    }
+}
+
+tasks.register('generateParser', CompileJavaccTask) {
+    getConventionMapping().map("classpath", { configurations.javacc })
+    arguments = [static: "false"]
+    inputDirectory = file("src/main/codegen")
+    outputDirectory = file(project.buildDir.absolutePath + "/generated-sources/org/polypheny/db/algebra/polyalg/parser")
 }
 
 
 sourceSets {
     main {
         java {
-            srcDirs = ["src/main/java","build/generated-sources"]
-            outputDir = file(project.buildDir.absolutePath + "/classes")
+            srcDirs = ["src/main/java", "build/generated/source/proto/main/java", files("${buildDir}/generated-sources").builtBy(generateParser)] //  "build/generated/sources/annotationProcessor"
         }
         resources {
             srcDirs = ["src/main/resources"]
@@ -92,7 +112,7 @@ sourceSets {
     test {
         java {
             srcDirs = ["src/test/java"]
-            outputDir = file(project.buildDir.absolutePath + "/test-classes")
+            destinationDirectory.set(file(project.buildDir.absolutePath + "/test-classes"))
         }
         resources {
             // We need the main resources for the tests as well.
@@ -103,34 +123,30 @@ sourceSets {
 }
 
 
-/**
- * Compile Pipeline
- */
-task generateFmppSources {
-    inputs.dir("src/main/codegen/templates")
-    outputs.dir(project.buildDir.absolutePath + "/generated-sources/fmpp")
-    doLast {
-        ant.fmpp(configuration: "src/main/codegen/config.fmpp",
-                sourceRoot: "src/main/codegen/templates",
-                outputRoot: project.buildDir.absolutePath + "/generated-sources/fmpp")
-    }
-}
-task generateParser (type: CompileJavaccTask) {
-    dependsOn("generateFmppSources")
-    getConventionMapping().map("classpath", { configurations.javacc })
-    arguments = [static: "false", lookahead: "2"]
-    inputDirectory = file(project.buildDir.absolutePath + "/generated-sources/fmpp/javacc")
-    outputDirectory = file(project.buildDir.absolutePath + "/generated-sources/org/polypheny/db/sql/parser/impl")
-}
-task generateJdbcVersionProperties(type: Copy) {
+tasks.register('generateVersionProperties', Copy) {
     from "src/main/resources/version"
     into project.buildDir.absolutePath + "/classes"
     expand(version: project.version, versionMajor: versionMajor, versionMinor: versionMinor, buildTimestamp: new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"))
 }
+
 compileJava {
-    dependsOn("generateParser", "generateJdbcVersionProperties")
+    dependsOn("generateVersionProperties")
+    dependsOn("generateParser")
+    dependsOn(":config:processResources")
+    dependsOn(":information:processResources")
+    dependsOn("generateProto")
 }
 
+delombok {
+    dependsOn(":config:processResources")
+    dependsOn(":information:processResources")
+    dependsOn("generateProto")
+}
+
+extractIncludeProto {
+    dependsOn(":config:compileJava")
+    dependsOn(":information:compileJava")
+}
 
 
 /**
@@ -142,13 +158,8 @@ javadoc {
     // Include private fields in JavaDoc
     options.memberLevel = JavadocMemberLevel.PRIVATE
     // Use HTML 5 for JavaDoc
-    if(JavaVersion.current().isJava9Compatible()) {
-        options.addBooleanOption("html5", true)
-    }
-    // Exclude build dir
-    exclude "fmpp/javacc/**"
+    options.addBooleanOption("html5", true)
 }
-
 
 
 /**
@@ -156,10 +167,7 @@ javadoc {
  */
 test {
     maxHeapSize = "2g" // Increase heap size (default is 512MB)
-    useJUnit {
-        excludeCategories 'org.polypheny.db.docker.DockerManagerTest'
-        excludeCategories 'org.polypheny.db.AdapterTestSuite'
-    }
+    useJUnitPlatform() // Use JUnit 5
 }
 
 
@@ -173,18 +181,25 @@ jar {
         attributes "Version": "$project.version"
     }
 }
-task sourcesJar(type: Jar, dependsOn: classes) {
-    classifier "sources"
+
+tasks.register('sourcesJar', Jar) {
+    dependsOn classes
+    archiveClassifier = "sources"
     from sourceSets.main.allSource
 }
-task javadocJar(type: Jar, dependsOn: javadoc) {
-    classifier "javadoc"
+
+tasks.register('javadocJar', Jar) {
+    dependsOn javadoc
+    archiveClassifier = "javadoc"
     from javadoc.destinationDir
 }
-task testJar(type: Jar, dependsOn: testClasses) {
-    classifier 'tests'
+
+tasks.register('testJar', Jar) {
+    dependsOn testClasses
+    archiveClassifier = "tests"
     from sourceSets.test.output
 }
+
 artifacts {
     //archives jar // regular jar containing only the compiled source
     archives sourcesJar // jar file containing the java doc files

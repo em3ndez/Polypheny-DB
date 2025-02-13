@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,13 +34,12 @@
 package org.polypheny.db.type;
 
 
-import java.io.Serializable;
 import java.util.List;
 import java.util.Objects;
-import org.polypheny.db.rel.type.RelDataType;
-import org.polypheny.db.rel.type.RelDataTypeFactory;
-import org.polypheny.db.rel.type.RelDataTypeField;
-import org.polypheny.db.sql.SqlOperatorBinding;
+import org.polypheny.db.algebra.type.AlgDataType;
+import org.polypheny.db.algebra.type.AlgDataTypeFactory;
+import org.polypheny.db.algebra.type.AlgDataTypeField;
+import org.polypheny.db.nodes.OperatorBinding;
 import org.polypheny.db.util.Util;
 
 
@@ -58,7 +57,7 @@ public abstract class PolyTypeTransforms {
      * if any of a calls operands is nullable
      */
     public static final PolyTypeTransform TO_NULLABLE =
-            (PolyTypeTransform & Serializable) ( opBinding, typeToTransform ) ->
+            ( opBinding, typeToTransform ) ->
                     PolyTypeUtil.makeNullableIfOperandsAre(
                             opBinding.getTypeFactory(),
                             opBinding.collectOperandTypes(),
@@ -68,8 +67,8 @@ public abstract class PolyTypeTransforms {
      * Parameter type-inference transform strategy where a derived type is transformed into the same type, but nullable if
      * and only if all of a call's operands are nullable.
      */
-    public static final PolyTypeTransform TO_NULLABLE_ALL = (PolyTypeTransform & Serializable) ( opBinding, type ) -> {
-        final RelDataTypeFactory typeFactory = opBinding.getTypeFactory();
+    public static final PolyTypeTransform TO_NULLABLE_ALL = ( opBinding, type ) -> {
+        final AlgDataTypeFactory typeFactory = opBinding.getTypeFactory();
         return typeFactory.createTypeWithNullability( type, PolyTypeUtil.allNullable( opBinding.collectOperandTypes() ) );
     };
 
@@ -77,7 +76,7 @@ public abstract class PolyTypeTransforms {
      * Parameter type-inference transform strategy where a derived type is transformed into the same type but not nullable.
      */
     public static final PolyTypeTransform TO_NOT_NULLABLE =
-            (PolyTypeTransform & Serializable) ( opBinding, typeToTransform ) ->
+            ( opBinding, typeToTransform ) ->
                     opBinding.getTypeFactory().createTypeWithNullability(
                             Objects.requireNonNull( typeToTransform ),
                             false );
@@ -86,7 +85,7 @@ public abstract class PolyTypeTransforms {
      * Parameter type-inference transform strategy where a derived type is transformed into the same type with nulls allowed.
      */
     public static final PolyTypeTransform FORCE_NULLABLE =
-            (PolyTypeTransform & Serializable) ( opBinding, typeToTransform ) ->
+            ( opBinding, typeToTransform ) ->
                     opBinding.getTypeFactory().createTypeWithNullability(
                             Objects.requireNonNull( typeToTransform ),
                             true );
@@ -95,8 +94,8 @@ public abstract class PolyTypeTransforms {
      * Type-inference strategy whereby the result is NOT NULL if any of the arguments is NOT NULL; otherwise the type is unchanged.
      */
     public static final PolyTypeTransform LEAST_NULLABLE =
-            (PolyTypeTransform & Serializable) ( opBinding, typeToTransform ) -> {
-                for ( RelDataType type : opBinding.collectOperandTypes() ) {
+            ( opBinding, typeToTransform ) -> {
+                for ( AlgDataType type : opBinding.collectOperandTypes() ) {
                     if ( !type.isNullable() ) {
                         return opBinding.getTypeFactory().createTypeWithNullability( typeToTransform, false );
                     }
@@ -112,7 +111,7 @@ public abstract class PolyTypeTransforms {
     public static final PolyTypeTransform TO_VARYING =
             new PolyTypeTransform() {
                 @Override
-                public RelDataType transformType( SqlOperatorBinding opBinding, RelDataType typeToTransform ) {
+                public AlgDataType transformType( OperatorBinding opBinding, AlgDataType typeToTransform ) {
                     switch ( typeToTransform.getPolyType() ) {
                         case VARCHAR:
                         case VARBINARY:
@@ -121,7 +120,7 @@ public abstract class PolyTypeTransforms {
 
                     PolyType retTypeName = toVar( typeToTransform );
 
-                    RelDataType ret = opBinding.getTypeFactory().createPolyType( retTypeName, typeToTransform.getPrecision() );
+                    AlgDataType ret = opBinding.getTypeFactory().createPolyType( retTypeName, typeToTransform.getPrecision() );
                     if ( PolyTypeUtil.inCharFamily( typeToTransform ) ) {
                         ret = opBinding.getTypeFactory()
                                 .createTypeWithCharsetAndCollation(
@@ -133,7 +132,7 @@ public abstract class PolyTypeTransforms {
                 }
 
 
-                private PolyType toVar( RelDataType type ) {
+                private PolyType toVar( AlgDataType type ) {
                     final PolyType polyType = type.getPolyType();
                     switch ( polyType ) {
                         case CHAR:
@@ -159,7 +158,7 @@ public abstract class PolyTypeTransforms {
     /**
      * Parameter type-inference transform strategy that wraps a given type in a multiset.
      *
-     * @see RelDataTypeFactory#createMultisetType(RelDataType, long)
+     * @see AlgDataTypeFactory#createMultisetType(AlgDataType, long)
      */
     public static final PolyTypeTransform TO_MULTISET = ( opBinding, typeToTransform ) -> opBinding.getTypeFactory().createMultisetType( typeToTransform, -1 );
 
@@ -168,8 +167,8 @@ public abstract class PolyTypeTransforms {
      * the returned type is the type of that field.
      */
     public static final PolyTypeTransform ONLY_COLUMN =
-            (PolyTypeTransform & Serializable) ( opBinding, typeToTransform ) -> {
-                final List<RelDataTypeField> fields = typeToTransform.getFieldList();
+            ( opBinding, typeToTransform ) -> {
+                final List<AlgDataTypeField> fields = typeToTransform.getFields();
                 assert fields.size() == 1;
                 return fields.get( 0 ).getType();
             };

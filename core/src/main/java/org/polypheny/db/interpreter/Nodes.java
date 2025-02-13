@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,17 +35,21 @@ package org.polypheny.db.interpreter;
 
 
 import com.google.common.collect.ImmutableList;
-import org.polypheny.db.plan.RelOptCluster;
-import org.polypheny.db.rel.RelNode;
-import org.polypheny.db.rel.core.Aggregate;
-import org.polypheny.db.rel.core.Filter;
-import org.polypheny.db.rel.core.Join;
-import org.polypheny.db.rel.core.Project;
-import org.polypheny.db.rel.core.Sort;
-import org.polypheny.db.rel.core.TableScan;
-import org.polypheny.db.rel.core.Union;
-import org.polypheny.db.rel.core.Values;
-import org.polypheny.db.rel.core.Window;
+import com.google.common.collect.ImmutableMap;
+import java.util.function.Consumer;
+import lombok.Getter;
+import org.polypheny.db.algebra.AlgNode;
+import org.polypheny.db.algebra.core.Aggregate;
+import org.polypheny.db.algebra.core.Filter;
+import org.polypheny.db.algebra.core.Join;
+import org.polypheny.db.algebra.core.Project;
+import org.polypheny.db.algebra.core.Sort;
+import org.polypheny.db.algebra.core.Union;
+import org.polypheny.db.algebra.core.Values;
+import org.polypheny.db.algebra.core.Window;
+import org.polypheny.db.algebra.core.relational.RelScan;
+import org.polypheny.db.interpreter.Bindables.BindableScan;
+import org.polypheny.db.plan.AlgCluster;
 import org.polypheny.db.rex.RexNode;
 
 
@@ -55,12 +59,29 @@ import org.polypheny.db.rex.RexNode;
 public class Nodes {
 
     /**
-     * Extension to {@link Interpreter.CompilerImpl} that knows how to handle the core logical {@link RelNode}s.
+     * Extension to {@link Interpreter.CompilerImpl} that knows how to handle the core logical {@link AlgNode}s.
      */
+    @Getter
     public static class CoreCompiler extends Interpreter.CompilerImpl {
 
-        CoreCompiler( Interpreter interpreter, RelOptCluster cluster ) {
+        private final ImmutableMap<Class<? extends AlgNode>, Consumer<AlgNode>> handlers;
+
+
+        CoreCompiler( Interpreter interpreter, AlgCluster cluster ) {
             super( interpreter, cluster );
+            handlers = ImmutableMap.copyOf( ImmutableMap.<Class<? extends AlgNode>, Consumer<AlgNode>>builder()
+                    .putAll( super.getHandlers() )
+                    .put( Join.class, a -> visit( (Join) a ) )
+                    .put( Aggregate.class, a -> visit( (Aggregate) a ) )
+                    .put( Filter.class, a -> visit( (Filter) a ) )
+                    .put( Project.class, a -> visit( (Project) a ) )
+                    .put( Values.class, a -> visit( (Values) a ) )
+                    .put( RelScan.class, a -> visit( (RelScan<?>) a ) )
+                    .put( BindableScan.class, a -> visit( (BindableScan) a ) )
+                    .put( Sort.class, a -> visit( (Sort) a ) )
+                    .put( Union.class, a -> visit( (Union) a ) )
+                    .put( Window.class, a -> visit( (Window) a ) )
+                    .build() );
         }
 
 
@@ -84,14 +105,14 @@ public class Nodes {
         }
 
 
-        public void visit( TableScan scan ) {
+        public void visit( RelScan<?> scan ) {
             final ImmutableList<RexNode> filters = ImmutableList.of();
-            node = TableScanNode.create( this, scan, filters, null );
+            node = ScanNode.create( this, scan, filters, null );
         }
 
 
-        public void visit( Bindables.BindableTableScan scan ) {
-            node = TableScanNode.create( this, scan, scan.filters, scan.projects );
+        public void visit( BindableScan scan ) {
+            node = ScanNode.create( this, scan, scan.filters, scan.projects );
         }
 
 
@@ -113,6 +134,8 @@ public class Nodes {
         public void visit( Window window ) {
             node = new WindowNode( this, window );
         }
+
     }
+
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020 The Polypheny Project
+ * Copyright 2019-2024 The Polypheny Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package org.polypheny.db.information;
 
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.UUID;
 
 
@@ -25,15 +26,16 @@ import java.util.UUID;
  */
 public class InformationProgress extends Information {
 
-    @SuppressWarnings({ "FieldCanBeLocal", "unused" })
+    @JsonProperty
     private String label;
-    @SuppressWarnings({ "unused" })
+    @JsonProperty
     private int value;
-    @SuppressWarnings({ "FieldCanBeLocal", "unused" })
+    @JsonProperty
     private ProgressColor color = ProgressColor.DYNAMIC;
-    @SuppressWarnings({ "FieldCanBeLocal", "unused" })
+    @JsonProperty
     private int min = 0;
-    @SuppressWarnings({ "FieldCanBeLocal", "unused" })
+
+    @JsonProperty
     private int max = 100;
 
 
@@ -53,8 +55,8 @@ public class InformationProgress extends Information {
      * Constructor
      *
      * @param groupId The id of the group this information object belongs to
-     * @param label   Label that will be displayed near the progress bar
-     * @param value   Value of the progress bar
+     * @param label Label that will be displayed near the progress bar
+     * @param value Value of the progress bar
      */
     public InformationProgress( final String groupId, final String label, final int value ) {
         this( UUID.randomUUID().toString(), groupId, label, value );
@@ -64,10 +66,10 @@ public class InformationProgress extends Information {
     /**
      * Constructor
      *
-     * @param id      Id of this Information object
+     * @param id Id of this Information object
      * @param groupId Group to which this information object belongs to
-     * @param label   Label that will be displayed near the progress bar
-     * @param value   Value of the progress bar
+     * @param label Label that will be displayed near the progress bar
+     * @param value Value of the progress bar
      */
     public InformationProgress( final String id, final String groupId, final String label, final int value ) {
         super( id, groupId );
